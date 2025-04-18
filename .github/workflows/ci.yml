@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup pnpm
+      uses: pnpm/action-setup@v4
+      with:
+        version: 8 # Use the pnpm version you are using locally
+
+    - name: Use Node.js 20.x
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20.x
+        cache: 'pnpm'
+
+    - name: Install dependencies
+      run: pnpm install --frozen-lockfile
+
+    # Placeholder for linting - Add linters (e.g., ESLint) later
+    - name: Lint
+      run: echo "Linting step placeholder"
+
+    # Placeholder for testing - Add test runners (e.g., Jest, Vitest) later
+    - name: Test
+      run: echo "Testing step placeholder" # Replace with actual test command, e.g., pnpm -r test
+
+    - name: Build
+      run: pnpm -r build # Assumes build scripts exist in workspace package.json files 

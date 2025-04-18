@@ -1,0 +1,241 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+Phase 1: Foundation Setup
+
+Objective: Create the skeleton that all other systems will plug into
+
+    Project Infrastructure
+
+        Set up monorepo with workspaces (client/server/shared)
+
+        Configure TypeScript paths for cross-package imports
+
+        Create CI/CD pipeline for testing/builds
+        Why: Ensures consistent environment for all components
+
+    Core Rendering System
+
+        Initialize Three.js scene with WebGL renderer
+
+        Create viewport management system (resize handling)
+
+        Set up basic lighting/shadow system
+        Why: Must render 3D space before adding gameplay
+
+    Network Foundation
+
+        Establish WebSocket connection protocol
+
+        Create message serialization/deserialization layer
+
+        Implement basic heartbeat/ping system
+        Why: Real-time networking is the game's backbone
+
+Phase 2: Player Systems
+
+Objective: Create the core interaction layer
+
+    Avatar System
+
+        GLB character loader with animation mapping
+
+        First-person camera rig (arms/weapon view)
+
+        Third-person spectator camera
+        Why: Players need visual representation
+
+    Movement Engine
+
+        WASD keyboard input handler
+
+        Mouse look controller (pitch/yaw)
+
+        Collision detection with map geometry
+        Why: Foundational for all gameplay actions
+
+    Networked State
+
+        Client prediction/reconciliation system
+
+        Server-side movement validation
+
+        State snapshot interpolation
+        Why: Makes movement feel responsive yet cheat-resistant
+
+Phase 3: Combat Systems
+
+Objective: Build the actual gameplay mechanics
+
+    Weapon System
+
+        Raycast-based shooting mechanism
+
+        Bullet spread/recoil patterns
+
+        Hit registration (client/server sync)
+        Why: Core of FPS gameplay loop
+
+    Damage Model
+
+        Health/armor management system
+
+        Hitbox configuration per character
+
+        Server-side damage calculation
+        Why: Critical for competitive fairness
+
+    Match Flow
+
+        Round timer/countdown system
+
+        Score tracking (kills/deaths)
+
+        Victory/defeat conditions
+        Why: Structures the 1v1 duel format
+
+Phase 4: Multiplayer Infrastructure
+
+Objective: Enable mass concurrent matches
+
+    Matchmaking Service
+
+        Player rating (ELO) system
+
+        Queue management with Redis
+
+        Server load balancer integration
+        Why: Efficiently pairs players across scale
+
+    Game Instance Isolation
+
+        Dedicated Node.js process per match
+
+        Process lifecycle management
+
+        Crash recovery system
+        Why: Prevents match failures from cascading
+
+    State Persistence
+
+        Redis session storage
+
+        MongoDB match history
+
+        Leaderboard aggregation
+        Why: Maintains competitive integrity
+
+Phase 5: Optimization & Scaling
+
+Objective: Achieve 10k concurrent matches
+
+    Network Optimization
+
+        Delta state compression
+
+        Packet prioritization (position > effects)
+
+        Bandwidth throttling
+        Why: Reduces server bandwidth costs
+
+    Spatial Partitioning
+
+        Octree map segmentation
+
+        Interest management system
+
+        LOD model switching
+        Why: Limits unnecessary computations
+
+    Horizontal Scaling
+
+        Kubernetes cluster configuration
+
+        Auto-scaling triggers (CPU/connections)
+
+        Global server region deployment
+        Why: Distributes load across hardware
+
+Phase 6: Security & Anti-Cheat
+
+Objective: Maintain fair competitive environment
+
+    Client Hardening
+
+        Code obfuscation
+
+        Memory tamper detection
+
+        Input pattern analysis
+        Why: Deters casual cheating
+
+    Server Validation
+
+        Movement plausibility checks
+
+        Shot verification rewinding
+
+        Rate limiting per action
+        Why: Catches impossible player actions
+
+    Monitoring
+
+        Cheat pattern detection AI
+
+        Player report system
+
+        Match replay storage
+        Why: Enables post-match analysis
+
+Phase 7: Polish & Launch
+
+Objective: Ship production-ready experience
+
+    Performance Tuning
+
+        Client FPS optimization
+
+        Server tick rate calibration
+
+        Database indexing
+        Why: Ensures smooth player experience
+
+    Progression Systems
+
+        Player profiles
+
+        Cosmetic unlock system
+
+        Achievement tracking
+        Why: Drives long-term engagement
+
+    Launch Prep
+
+        Load testing (20k concurrent sim)
+
+        Failover systems
+
+        Monitoring dashboards
+        Why: Confirms scale readiness
+
+Critical Path Dependencies
+
+    Must Complete First:
+
+        Network Foundation → All multiplayer features depend on this
+
+        Movement Engine → Required for combat systems
+
+    Parallel Development:
+
+        3D Rendering vs Network Systems
+
+        Matchmaking vs Game Instance Logic
+
+    Final Integration:
+
+        Combine combat + movement + networking
+
+        Connect matchmaking to game instances

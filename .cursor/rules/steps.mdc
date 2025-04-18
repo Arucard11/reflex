@@ -1,0 +1,939 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# React/Express FPS Game Development Plan
+
+## Overview
+
+This document outlines the detailed, step-by-step process for developing a real-time multiplayer First-Person Shooter (FPS) game using React for the client and Express (Node.js) for the server. Each step includes the action, rationale, conceptual unit testing, and a mandatory checkpoint. **No code should be written directly from this plan; it serves as a conceptual guide for an AI.**
+
+---
+
+## Phase 1: Foundation Setup
+
+**Objective:** Create the skeleton that all other systems will plug into.
+
+### 1.1 Project Infrastructure
+
+**Goal:** Establish a robust, maintainable, and scalable project structure.
+
+*   #### 1.1.1 Set up monorepo with workspaces (client/server/shared)
+    *   **Step 1:** Initialize a new project directory.
+    *   **Step 2:** Choose and configure a monorepo management tool (e.g., Yarn Workspaces, PNPM Workspaces, or Turborepo). Initialize it according to its documentation.
+    *   **Step 3:** Create three primary package directories within the monorepo root: `packages/client`, `packages/server`, `packages/shared`.
+    *   **Step 4:** Initialize each directory as a distinct package (e.g., using `npm init` or `yarn init`), potentially marking them as private if they won't be published independently. Define basic `package.json` files in each.
+    *   **Step 5:** Configure the root `package.json` or the monorepo tool's configuration file (e.g., `pnpm-workspace.yaml`, `turbo.json`) to recognize these directories as workspaces.
+    *   **Why:** Centralizes code management, simplifies dependency sharing and cross-package development, and streamlines build/test processes across the entire application.
+    *   **Unit Test:** Verify that the monorepo tool correctly identifies the workspaces. Attempt to install dependencies from the root; check that dependencies are correctly linked or hoisted as expected by the tool. Ensure commands run from the root can target specific workspaces (e.g., `yarn workspace client build`).
+    *   **STOP & CHECK:** Confirm the monorepo structure is correctly set up and the chosen tool manages the workspaces as intended. Ensure basic package initialization is complete in client, server, and shared directories.
+
+*   #### 1.1.2 Configure TypeScript paths for cross-package imports
+    *   **Step 1:** Add TypeScript as a dev dependency to the root workspace and potentially to each sub-package (`client`, `server`, `shared`).
+    *   **Step 2:** Create a base `tsconfig.json` file in the root directory. Configure common compiler options (e.g., `target`, `module`, `strict`).
+    *   **Step 3:** In the root `tsconfig.json`, define `paths` aliases under `compilerOptions`. Map aliases like `@client/*`, `@server/*`, `@shared/*` to their respective `packages/*/src` directories (or equivalent source directories). Example: `"@shared/*": ["packages/shared/src/*"]`. Set `baseUrl` to `.` or `packages`.
+    *   **Step 4:** In each workspace (`client`, `server`, `shared`), create its own `tsconfig.json`. Use the `extends` property to inherit from the root `tsconfig.json`. Adjust specific options if necessary (e.g., `jsx` for React client, `module` resolution specifics). Ensure each workspace's `tsconfig.json` respects the path aliases or configure them appropriately relative to its own context if needed.
+    *   **Why:** Enables clean, maintainable imports between the `client`, `server`, and `shared` packages using absolute-like paths (e.g., `import { GameEvent } from '@shared/types';`) instead of fragile relative paths (`../../shared/src/types`). The `shared` package is crucial for defining common data structures and types used by both client and server.
+    *   **Unit Test:** Create a simple type/interface in the `shared` package's source directory. Attempt to import and use this type/interface in both the `client` and `server` packages using the defined path alias (e.g., `@shared/`). Run the TypeScript compiler (`tsc --noEmit`) in both the `client` and `server` workspaces (or from the root, targeting them). Verify that the compiler resolves the imports correctly without errors.
+    *   **STOP & CHECK:** Confirm that TypeScript successfully compiles code using the defined path aliases for cross-workspace imports. Ensure no compilation errors related to module resolution occur.
+
+*   #### 1.1.3 Create CI/CD pipeline for testing/builds
+    *   **Step 1:** Choose a CI/CD platform (e.g., GitHub Actions, GitLab CI, Jenkins).
+    *   **Step 2:** Create the basic configuration file for the chosen platform (e.g., `.github/workflows/ci.yml`).
+    *   **Step 3:** Define the trigger conditions for the pipeline (e.g., on push/pull request to `main` or `develop` branches).
+    *   **Step 4:** Define the initial jobs within the pipeline:
+        *   **Setup:** Check out code, set up the correct Node.js version, configure the chosen package manager (npm, yarn, pnpm), and install dependencies respecting the monorepo structure (e.g., `yarn install --frozen-lockfile` or `pnpm install --frozen-lockfile`).
+        *   **Linting:** Add a job/step to run linters (e.g., ESLint) across all workspaces.
+        *   **Testing:** Add a job/step to run unit tests (initially, these might be placeholder tests) across all workspaces. Use the monorepo tool's command filtering if possible (e.g., `turbo run test` or `yarn workspaces foreach run test`).
+        *   **Building:** Add a job/step to run the build process for relevant workspaces (e.g., `client`, `server`). Use the monorepo tool's command filtering (e.g., `turbo run build` or `yarn workspace client build && yarn workspace server build`).
+    *   **Why:** Ensures code quality, catches integration issues early, provides automated testing, and produces consistent build artifacts in a clean environment, independent of local developer setups.
+    *   **Unit Test:** Create placeholder test scripts (e.g., `echo "Running tests..." && exit 0`) and build scripts (e.g., `echo "Building..." && exit 0`) in each workspace's `package.json`. Commit the initial CI configuration file and push it to the repository. Observe the CI/CD platform. Verify that the pipeline triggers correctly, checks out the code, installs dependencies, and executes the (placeholder) lint, test, and build steps successfully for all relevant workspaces.
+    *   **STOP & CHECK:** Confirm the CI pipeline runs automatically on the defined triggers and completes all defined steps (setup, lint, test, build) without errors.
+
+### 1.2 Core Rendering System
+
+**Goal:** Establish the basic 3D environment rendering capability on the client.
+
+*   #### 1.2.1 Initialize Three.js scene with WebGL renderer
+    *   **Step 1:** In the `client` package, add `three` as a dependency.
+    *   **Step 2:** Create a main rendering component or module (e.g., a React component `GameView.tsx`).
+    *   **Step 3:** Within this component/module, on initialization (e.g., React's `useEffect` or `componentDidMount`), instantiate a `THREE.WebGLRenderer`. Configure basic properties like antialiasing.
+    *   **Step 4:** Get a reference to a DOM element (e.g., a `div`) that will serve as the rendering canvas container. Append the renderer's DOM element (`renderer.domElement`) to this container.
+    *   **Step 5:** Create a `THREE.Scene` object to hold all 3D objects, lights, and cameras.
+    *   **Step 6:** Create a `THREE.PerspectiveCamera`. Set its initial Field of View (FOV), aspect ratio (placeholder, will be updated), near and far clipping planes, and initial position/lookAt target. Add the camera to the scene (or manage it separately).
+    *   **Step 7:** Implement a basic render loop using `requestAnimationFrame`. In each frame, call `renderer.render(scene, camera)`. Ensure the loop starts when the component mounts and stops cleanly when it unmounts.
+    *   **Why:** This is the absolute minimum required to render a 3D space using Three.js. It sets up the renderer, the container for 3D objects (scene), and the viewpoint (camera).
+    *   **Unit Test:** Run the client application. Verify that a `<canvas>` element generated by Three.js is added to the designated container element in the DOM. Check the browser's console for any WebGL initialization errors. Add a simple `THREE.Mesh` (e.g., a `BoxGeometry` with `MeshBasicMaterial`) to the scene and position the camera to view it. Confirm the object appears within the canvas (it might just be a solid color initially). Use browser developer tools to inspect the frame rate; confirm the render loop is running.
+    *   **STOP & CHECK:** Confirm that the Three.js renderer initializes without errors, attaches to the DOM, and the basic render loop is active. A simple object should be visible if added.
+
+*   #### 1.2.2 Create viewport management system (resize handling)
+    *   **Step 1:** Identify the container element whose dimensions dictate the rendering viewport size.
+    *   **Step 2:** Add an event listener for the `resize` event on the `window` (or use a `ResizeObserver` on the container element for more robustness).
+    *   **Step 3:** Inside the resize event handler function:
+        *   Get the current width and height of the container element.
+        *   Update the `THREE.WebGLRenderer`'s size using `renderer.setSize(newWidth, newHeight)`. Set the `updateStyle` argument to `false` if CSS handles the canvas element's display size.
+        *   Update the `THREE.PerspectiveCamera`'s aspect ratio: `camera.aspect = newWidth / newHeight`.
+        *   Crucially, call `camera.updateProjectionMatrix()` to apply the aspect ratio change.
+    *   **Step 4:** Ensure this handler function is correctly bound (if necessary) and cleaned up (remove event listener) when the rendering component unmounts.
+    *   **Step 5:** Call the resize handler function once initially after setup to set the correct initial size and aspect ratio based on the container's starting dimensions.
+    *   **Why:** Ensures the 3D rendering correctly fills the available space and avoids distortion when the browser window or container element is resized.
+    *   **Unit Test:** Run the client application with a visible 3D object in the scene. Resize the browser window. Observe the canvas element: verify it resizes to fill its container. Observe the rendered 3D object: verify it scales correctly with the viewport and does not appear stretched or squashed. Check that the aspect ratio updates maintain the scene's proportions.
+    *   **STOP & CHECK:** Confirm that resizing the window dynamically updates the renderer and camera settings, resulting in a correctly proportioned and sized 3D view.
+
+*   #### 1.2.3 Set up basic lighting/shadow system
+    *   **Step 1:** Add lighting to the `THREE.Scene`. Start with an `AmbientLight` to provide baseline illumination and prevent completely black areas. Add a `DirectionalLight` to simulate a primary light source (like the sun) which can cast shadows. Position the directional light appropriately (e.g., above and offset).
+    *   **Step 2:** Enable shadow casting on the `DirectionalLight` by setting `directionalLight.castShadow = true`. Configure shadow properties like map size (`shadow.mapSize.width`, `shadow.mapSize.height`) for quality vs. performance trade-off. Adjust shadow camera properties (`shadow.camera.near`, `shadow.camera.far`, `shadow.camera.left`, etc.) to encompass the relevant shadow-casting area.
+    *   **Step 3:** Enable shadow maps on the `THREE.WebGLRenderer` by setting `renderer.shadowMap.enabled = true`. Choose a shadow map type if desired (e.g., `THREE.PCFSoftShadowMap`).
+    *   **Step 4:** Create a ground plane object (e.g., `PlaneGeometry` with `MeshStandardMaterial` or `MeshPhongMaterial` which react to light). Add it to the scene. Set `groundPlane.receiveShadow = true` on this object.
+    *   **Step 5:** For any objects in the scene that should cast shadows (e.g., the test box), ensure they use a material that reacts to light (like `MeshStandardMaterial`) and set `object.castShadow = true`.
+    *   **Why:** Lighting makes the 3D scene comprehensible and visually appealing. Shadows provide crucial depth cues and grounding for objects within the environment. `MeshStandardMaterial` is generally preferred for physically-based rendering.
+    *   **Unit Test:** Add a simple object (e.g., a cube or sphere) above the ground plane. Position the directional light so the object is between the light and the plane. Run the client application. Verify that the object is illuminated by the lights (not just a flat color like with `MeshBasicMaterial`). Verify that the object casts a visible shadow onto the ground plane. Experiment with light position/intensity and shadow map settings to see their effect. Check that the ambient light provides some visibility even in shadowed areas.
+    *   **STOP & CHECK:** Confirm that basic lighting illuminates the scene realistically and that shadows are being cast by designated objects and received by others, enhancing the scene's depth.
+
+### 1.3 Network Foundation
+
+**Goal:** Establish the core communication layer between the client and server.
+
+*   #### 1.3.1 Establish WebSocket connection protocol
+    *   **Step 1:** Choose a WebSocket library. Options include `ws` (popular for Node.js servers), `Socket.IO` (provides fallback mechanisms and rooms, can be used on client/server), or the browser's native `WebSocket` API on the client. Add the chosen library as a dependency to the `server` package and potentially the `client` package.
+    *   **Step 2:** In the `server` package (e.g., within your main Express app file or a dedicated module), initialize the WebSocket server. Configure it to listen on a specific port or attach it to the existing HTTP server.
+    *   **Step 3:** Implement basic server-side event handlers: handle new connections (`connection`), disconnections (`close`), and incoming messages (`message`). Log these events for initial debugging. Assign a unique ID to each connected client.
+    *   **Step 4:** In the `client` package (e.g., in a dedicated network service module or React context), implement code to establish a WebSocket connection to the server's endpoint (e.g., `ws://localhost:PORT` or `wss://yourdomain.com`).
+    *   **Step 5:** Implement basic client-side event handlers: handle successful connection (`open`), connection closure (`close`), errors (`error`), and incoming messages (`message`). Log these events.
+    *   **Why:** WebSockets provide a persistent, bidirectional communication channel necessary for real-time multiplayer games, allowing the server to push updates to clients and clients to send inputs instantly.
+    *   **Unit Test:** Start the server application. Start the client application. Check the server logs: verify a 'connection' event is logged when the client connects. Check the client logs/console: verify an 'open' event is logged. Manually stop the client application; check the server logs for a 'close' event. Manually stop the server application; check the client logs for a 'close' or 'error' event.
+    *   **STOP & CHECK:** Confirm that the client can reliably establish and maintain a basic WebSocket connection with the server, and that both ends correctly detect connection and disconnection events.
+
+*   #### 1.3.2 Create message serialization/deserialization layer
+    *   **Step 1:** In the `shared` package, define TypeScript interfaces or types for the various messages that will be exchanged (e.g., `PlayerInputMessage`, `GameStateUpdateMessage`, `ChatMessage`). Include a mandatory `type` field (string enum preferably) in each message interface to identify the message type. Example: `interface BaseMessage { type: string; } interface PlayerPositionUpdate extends BaseMessage { type: 'PLAYER_POSITION'; x: number; y: number; z: number; }`.
+    *   **Step 2:** Choose a serialization format. JSON is the simplest to start with (`JSON.stringify`, `JSON.parse`). Consider binary formats like MessagePack or Protocol Buffers later for optimization if needed, but start with JSON for ease of debugging.
+    *   **Step 3:** On the sending side (both client and server), before sending a message object over the WebSocket, serialize it into the chosen format (e.g., `JSON.stringify(messageObject)`).
+    *   **Step 4:** On the receiving side (both client and server), when a message event occurs, deserialize the received data (which is typically a string or Blob/Buffer) back into a JavaScript object (e.g., `JSON.parse(event.data)`).
+    *   **Step 5:** Implement a central message handler function on both client and server. This function takes the deserialized object, inspects its `type` property, and routes it to the appropriate logic based on the type (e.g., using a `switch` statement or a map of message types to handler functions). Add basic type validation (e.g., check if required fields exist) after parsing.
+    *   **Why:** Ensures that structured data can be reliably transmitted over the text-based or binary WebSocket channel and correctly interpreted by the receiving end. A common `shared` definition prevents mismatches between client and server expectations.
+    *   **Unit Test:** Define a simple test message type (e.g., `EchoMessage`) in `shared`. Implement logic on the server to receive an `EchoMessage`, log its content, and send the same message back to the client. Implement logic on the client to send an `EchoMessage` (e.g., on a button click) and log any message received from the server. Run both. Send the message from the client. Verify the server logs the correctly deserialized message content. Verify the client receives the echoed message back from the server and logs its correctly deserialized content. Test sending malformed JSON to ensure error handling works.
+    *   **STOP & CHECK:** Confirm that structured messages defined in the `shared` package can be serialized, sent, received, deserialized, and correctly routed based on their type on both the client and server.
+
+*   #### 1.3.3 Implement basic heartbeat/ping system
+    *   **Step 1:** Define 'ping' and 'pong' message types in the `shared` package (e.g., `{ type: 'PING', timestamp: number }`, `{ type: 'PONG', timestamp: number }`).
+    *   **Step 2:** On the client, use `setInterval` to periodically (e.g., every 5 seconds) send a 'ping' message to the server, including the current client timestamp.
+    *   **Step 3:** On the server, implement a handler for the 'ping' message type. When a 'ping' is received from a client, immediately send a 'pong' message back to that specific client, echoing the timestamp received in the 'ping'.
+    *   **Step 4:** On the client, implement a handler for the 'pong' message type. When a 'pong' is received:
+        *   Optionally, calculate round-trip time (RTT) using the echoed timestamp: `Date.now() - pongMessage.timestamp`.
+        *   Crucially, reset a disconnection timer associated with the connection.
+    *   **Step 5:** On the client, set up a `setTimeout` (e.g., for 15 seconds - slightly longer than the ping interval). If the 'pong' handler resets this timer before it fires, the connection is considered alive. If the timeout fires (meaning no 'pong' was received recently), assume the connection is dead and trigger disconnection logic (e.g., show a "disconnected" message, attempt reconnection). Restart the timeout after successfully receiving a pong or sending a ping.
+    *   **Step 6:** (Optional Server-side Check): The server can also track the last time a message (any message, or specifically a ping) was received from each client. Periodically check this timestamp; if a client hasn't sent anything for too long (e.g., 30 seconds), the server can forcefully disconnect that client to free up resources.
+    *   **Why:** Detects unresponsive or "zombie" connections where the underlying TCP connection might still be open but the application on one end is frozen or has lost network connectivity without a clean close event. This prevents resource leaks and ensures both client and server know the actual connection state.
+    *   **Unit Test:** Run client and server. Observe client and server logs to verify 'ping' and 'pong' messages are exchanged periodically. Use browser/system network tools to simulate packet loss or temporarily block the connection between client and server. Verify that the client's disconnection timer eventually fires and triggers the disconnection logic. Verify that the server's cleanup logic (if implemented) disconnects the client after a period of inactivity. Restore the connection and verify the heartbeat resumes.
+    *   **STOP & CHECK:** Confirm the heartbeat mechanism is active, ping/pong messages are exchanged, and connection health is monitored. Ensure both client and server can detect and handle unresponsive connections based on the heartbeat timeout.
+
+---
+
+## Phase 2: Player Systems
+
+**Objective:** Create the core interaction layer allowing players to exist and move within the world.
+
+### 2.1 Avatar System
+
+**Goal:** Provide visual representation for players in the game world.
+
+*   #### 2.1.1 GLB character loader with animation mapping
+    *   **Step 1:** Choose or create a 3D character model suitable for the game (including animations like idle, run, jump, shoot) and export it in GLB format (which bundles model, textures, and animations). Place the GLB file(s) in the client's public assets directory.
+    *   **Step 2:** In the `client` package, add `three`'s `GLTFLoader` (usually included, check imports).
+    *   **Step 3:** Create a module/class responsible for loading and managing character models. Implement a function that uses `GLTFLoader` to load the specified GLB file asynchronously.
+    *   **Step 4:** Once loaded, extract the scene (the visual mesh) and the animations array from the loaded GLTF data. Add the model's scene object to the main Three.js scene.
+    *   **Step 5:** Create a `THREE.AnimationMixer` instance for the loaded model's scene. This mixer will control animation playback.
+    *   **Step 6:** Iterate through the extracted animations. Store references to animation clips (`THREE.AnimationClip`) usually by name (e.g., in a map: `{'idle': idleClip, 'run': runClip}`). Create `AnimationAction` instances for each clip using `mixer.clipAction(clip)`.
+    *   **Step 7:** Implement functions to play, stop, cross-fade, and loop specific animations (e.g., `playAnimation('run')`, `crossFadeTo('idle', 0.3)`).
+    *   **Step 8:** In the main render loop, update the `AnimationMixer` instance with the frame delta time (`mixer.update(deltaTime)`).
+    *   **Why:** GLB is an efficient standard for 3D model distribution. Loading the model provides the player's visual form, and the animation system brings it to life based on player actions.
+    *   **Unit Test:** Load the GLB model. Verify the character mesh appears correctly in the scene (textures, materials). Verify the animation clips are found and stored. Call the function to play the 'idle' animation; verify the character plays the idle animation visually. Call the function to play the 'run' animation; verify the character switches to the running animation. Ensure the `mixer.update()` call is present in the render loop. Check for console errors during loading or animation playback.
+    *   **STOP & CHECK:** Confirm the character model loads and renders correctly. Basic animations (like idle, run) can be triggered and played back smoothly on the character model.
+
+*   #### 2.1.2 First-person camera rig (arms/weapon view)
+    *   **Step 1:** Create a separate `THREE.Scene` (let's call it `fpsScene`) and a separate `THREE.PerspectiveCamera` (`fpsCamera`) specifically for rendering the first-person elements (arms, weapon). Configure the `fpsCamera` with a suitable FOV for this view, and crucially, set `fpsCamera.near` to a very small value to avoid clipping the weapon model.
+    *   **Step 2:** Load the first-person arms/weapon model (likely another GLB file). Add this model's scene object to the `fpsScene`.
+    *   **Step 3:** Position the `fpsCamera` and the arms/weapon model within the `fpsScene` relative to each other to achieve the desired first-person viewpoint. The arms/weapon model should appear correctly positioned in the `fpsCamera`'s view.
+    *   **Step 4:** In the main render loop, *after* rendering the main world scene (`renderer.render(mainScene, mainCamera)`):
+        *   Clear the depth buffer: `renderer.clearDepth()`. This makes the FPS elements render on top of the world scene.
+        *   Render the FPS scene using the FPS camera: `renderer.render(fpsScene, fpsCamera)`.
+    *   **Step 5:** Ensure the `mainCamera`'s rotation (especially pitch and yaw, controlled by mouse look later) also controls the `fpsCamera`'s rotation, so the arms/weapon view follows the player's look direction. The position might remain fixed relative to the viewport.
+    *   **Why:** Separating the first-person arms/weapon into their own scene and rendering pass ensures they are always drawn on top of the world geometry without Z-fighting issues and allows for independent FOV/rendering control.
+    *   **Unit Test:** Load and display the first-person arms/weapon model using the separate scene and camera. Verify it appears in the foreground, overlaying the main world scene. Check that clearing the depth buffer prevents the world geometry from clipping through the arms/weapon model. Temporarily link the rotation of the main camera to the FPS camera; verify the arms/weapon view rotates correctly as the main camera view changes.
+    *   **STOP & CHECK:** Confirm the first-person arms/weapon model renders correctly in the foreground, overlaying the main scene, and that its orientation can be controlled (even if manually for now).
+
+*   #### 2.1.3 Third-person spectator camera
+    *   **Step 1:** Implement a camera controller specifically for a third-person perspective. This typically involves positioning the camera behind and slightly above the player character model (the one loaded in 2.1.1).
+    *   **Step 2:** Add logic to make the camera orbit around the character model (e.g., based on mouse drag or specific keys).
+    *   **Step 3:** Implement basic camera collision/occlusion handling: if the line of sight from the character to the desired camera position is blocked by world geometry, move the camera closer to the character along that line until it's no longer blocked. This prevents the camera from clipping inside walls. Raycasting from the character towards the camera's ideal position is a common technique.
+    *   **Step 4:** Add a mechanism (e.g., a key press, UI button) to switch between the first-person camera setup (main world camera + FPS overlay) and this third-person camera (using only the main world camera, positioned differently). When switching, ensure the correct camera is used for rendering the main scene and the FPS overlay is disabled/enabled appropriately.
+    *   **Why:** Provides an alternative view useful for spectating other players or reviewing gameplay. Also helpful during development and debugging.
+    *   **Unit Test:** Implement the camera switching logic. Verify you can toggle between first-person and third-person views. In third-person view, check that the camera follows the player character model (even if it's static for now). Test the orbiting controls. Place a large object between the character and the camera's default position; verify the camera moves closer to the character to avoid clipping through the object.
+    *   **STOP & CHECK:** Confirm that a functional third-person camera mode is available, allowing orbiting and basic occlusion handling, and that switching between first-person and third-person views works correctly.
+
+### 2.2 Movement Engine
+
+**Goal:** Implement character movement and interaction with the game world.
+
+*   #### 2.2.1 WASD keyboard input handler
+    *   **Step 1:** In the `client`, add event listeners for `keydown` and `keyup` events on the `window` or a relevant focused element.
+    *   **Step 2:** Maintain a state object or set to track which movement keys (W, A, S, D, potentially Shift for sprint, Space for jump) are currently pressed. On `keydown`, set the corresponding key state to true. On `keyup`, set it to false.
+    *   **Step 3:** In the client's main update loop (e.g., the `requestAnimationFrame` callback), read the current state of the pressed keys.
+    *   **Step 4:** Calculate a desired movement direction vector based on the pressed keys (e.g., W -> forward, A -> left, etc.) relative to the camera's current horizontal orientation (yaw). Normalize this vector if necessary to prevent faster diagonal movement.
+    *   **Step 5:** Apply a movement speed factor to this direction vector to get a velocity vector.
+    *   **Step 6:** Update the player character's position based on this velocity vector and the frame's delta time. (Note: This is client-side prediction for now; server reconciliation comes later).
+    *   **Why:** Captures standard FPS keyboard inputs and translates them into intended movement directions, forming the basis of player locomotion.
+    *   **Unit Test:** Add console logs inside the keydown/keyup handlers to verify they fire correctly for WASD keys. Log the calculated movement vector in the update loop. Observe the player character model (or a placeholder representation) in the 3D scene. Press WASD keys; verify the character moves forward, left, backward, and right respectively, relative to the camera's direction. Check that releasing keys stops movement.
+    *   **STOP & CHECK:** Confirm that WASD key presses correctly update the movement state and result in corresponding directional movement of the player representation on the client.
+
+*   #### 2.2.2 Mouse look controller (pitch/yaw)
+    *   **Step 1:** Add an event listener for the `mousemove` event.
+    *   **Step 2:** Request Pointer Lock API (`element.requestPointerLock()`) on the game's container element (e.g., when the user clicks on it). This hides the cursor and provides continuous mouse movement data (`movementX`, `movementY`). Handle pointer lock changes and errors.
+    *   **Step 3:** Inside the `mousemove` event handler, when pointer lock is active, use the `event.movementX` and `event.movementY` values. These represent the change in mouse position since the last event.
+    *   **Step 4:** Update the camera's rotation:
+        *   **Yaw (Horizontal):** Rotate the camera (and potentially the player character model's root object) around the vertical axis (usually Y-axis) based on `movementX`. Apply a sensitivity factor. `camera.rotation.y -= movementX * sensitivity;` (adjust axis/sign as needed).
+        *   **Pitch (Vertical):** Rotate the camera around its local horizontal axis (usually X-axis) based on `movementY`. Apply sensitivity. `camera.rotation.x -= movementY * sensitivity;` (adjust axis/sign as needed).
+    *   **Step 5:** Clamp the pitch rotation to prevent looking straight up or down and flipping over (e.g., limit to +/- 89 degrees or +/- Math.PI/2 radians). `camera.rotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, camera.rotation.x));`
+    *   **Step 6:** Ensure the WASD movement direction calculated in 2.2.1 uses the updated camera yaw rotation to determine "forward", "left", etc.
+    *   **Why:** Implements standard FPS mouse aiming, allowing the player to look around the environment freely and control their movement direction. Pointer lock provides a better FPS experience than relying on cursor position.
+    *   **Unit Test:** Click on the game container to activate pointer lock; verify the cursor disappears. Move the mouse left/right; verify the camera view pans horizontally. Move the mouse up/down; verify the camera view tilts vertically. Check that the vertical tilt is clamped correctly. Press W; verify the character now moves in the direction the camera is facing. Exit pointer lock (usually via Esc key); verify the cursor reappears.
+    *   **STOP & CHECK:** Confirm mouse movement correctly controls camera pitch and yaw within limits, pointer lock works, and WASD movement is relative to the current look direction.
+
+*   #### 2.2.3 Collision detection with map geometry
+    *   **Step 1:** Represent the static map geometry (walls, floors, obstacles) in a way suitable for collision checks. This could be:
+        *   Using simplified invisible collision meshes (boxes, spheres) matching the visual geometry.
+        *   Using a physics engine (like PhysX, Cannon.js, Rapier) integrated with Three.js, which handles collision shapes and detection.
+        *   Implementing manual raycasting or shape intersection checks against map geometry data. (Starting simple with Axis-Aligned Bounding Boxes (AABB) might be feasible initially).
+    *   **Step 2:** Define the player's collision shape (e.g., a capsule or a cylinder) centered around the player's position.
+    *   **Step 3:** Before applying the calculated movement (from WASD input) in the update loop:
+        *   Calculate the player's potential next position based on their current position and velocity for the frame.
+        *   Check if the player's collision shape at this *potential next position* would intersect with any map collision geometry.
+    *   **Step 4:** If a collision *would* occur:
+        *   Prevent the movement entirely, or preferably:
+        *   Adjust the movement vector to "slide" along the collision surface. This often involves projecting the intended movement vector onto the plane of the surface being collided with. Physics engines often handle this automatically. For manual methods, find the collision normal and adjust velocity accordingly.
+    *   **Step 5:** Apply the (potentially adjusted) movement to the player's actual position.
+    *   **Step 6:** Implement basic gravity: Apply a constant downward force/velocity to the player in each frame. Check for collisions below the player; if colliding with the ground, negate the downward velocity (and set an 'isGrounded' flag, useful for jumping).
+    *   **Why:** Prevents the player from moving through walls and floors, making the character interact realistically with the game environment. Gravity makes the world feel more grounded.
+    *   **Unit Test:** Create a simple test environment with walls and a floor using basic shapes (cubes). Implement collision using AABBs or a basic physics engine setup. Apply gravity. Try to move the player character into a wall; verify they stop or slide along it instead of passing through. Walk off a ledge; verify the character falls due to gravity. Verify the character stops falling when they hit the ground. Check movement on slopes if applicable.
+    *   **STOP & CHECK:** Confirm the player character collides with map geometry, cannot pass through solid objects, is affected by gravity, and can move along surfaces (sliding).
+
+### 2.3 Networked State
+
+**Goal:** Synchronize player state across the network for a smooth and fair multiplayer experience.
+
+*   #### 2.3.1 Client prediction/reconciliation system
+    *   **Step 1:** Client-Side Prediction: Continue applying player inputs immediately to the local player character (as implemented in 2.2.1, 2.2.3). Do *not* wait for server confirmation before showing movement locally. Store these inputs along with a sequence number in a local buffer.
+    *   **Step 2:** Send Inputs: Send the buffered inputs (including sequence number, key states, look direction, delta time) to the server at a regular rate (e.g., 10-20 times per second).
+    *   **Step 3:** Server State Updates: The client will receive authoritative game state updates from the server (covered in 2.3.2). These updates will include the player's correct position/state as calculated by the server, along with the sequence number of the *last input* the server processed for that state.
+    *   **Step 4:** Reconciliation: When the client receives a server state update:
+        *   Compare the sequence number in the server update with the inputs stored locally.
+        *   Discard any local inputs in the buffer that are older than or equal to the acknowledged sequence number from the server.
+        *   Set the client's player character state (position, velocity, etc.) directly to the state received from the server (this is the correction).
+        *   *Re-apply* all the remaining inputs in the local buffer (those newer than the server-acknowledged input) *on top of the corrected server state*. Use the same movement and collision logic as in Step 1, simulating the missed frames instantly.
+    *   **Why:** Client-side prediction makes the player's own movement feel instantly responsive. Server reconciliation corrects any discrepancies between the client's prediction and the server's authoritative simulation, ensuring consistency and preventing cheating while minimizing visible corrections (snapping/rubber-banding) if prediction is accurate.
+    *   **Unit Test:** (Requires Server-Side Validation - 2.3.2). Introduce artificial latency or packet loss between client and server (using network simulation tools). Move the player character on the client. Observe the movement: it should feel responsive initially. Observe the server's view (if possible) or log server state: it should eventually match the client's actions. Observe the client character's position: verify that occasional small corrections (snaps) occur as server updates arrive and reconciliation happens, especially under high latency. Ensure these corrections don't completely break the sense of control. Verify inputs are being sent and acknowledged sequence numbers are increasing.
+    *   **STOP & CHECK:** Confirm the client predicts its own movement instantly. Inputs are sent to the server. Server state updates trigger reconciliation, correcting the client's position while re-applying subsequent inputs, resulting in responsive control with corrections under latency.
+
+*   #### 2.3.2 Server-side movement validation
+    *   **Step 1:** On the server, maintain an authoritative representation of each connected player's state (position, velocity, rotation, etc.).
+    *   **Step 2:** When the server receives an input packet from a client (containing key states, look direction, sequence number, delta time):
+        *   Retrieve the authoritative state for that player.
+        *   Apply the received input to the player's server-side state using the *same* movement logic, collision detection rules, and physics simulation steps as the client (ideally using code shared via the `@shared` package or duplicated carefully). Simulate the movement over the provided delta time.
+        *   Perform validation checks: Is the movement plausible? (e.g., check for excessive speed, flying, teleporting, moving through walls that the server's collision detection should prevent). If validation fails, either ignore the input, clamp it, or log it for anti-cheat.
+    *   **Step 3:** Store the resulting new authoritative state for the player. Record the sequence number of the input that produced this state.
+    *   **Step 4:** Periodically (e.g., 10-20 times per second), broadcast the authoritative state (position, rotation, velocity, last processed input sequence number) of relevant players to all connected clients (or at least those within a certain proximity/interest area).
+    *   **Why:** The server acts as the ultimate source of truth for player positions and actions. Validating inputs prevents cheating (speed hacks, noclip) and ensures the game state remains consistent and fair for all players.
+    *   **Unit Test:** (Requires Client Prediction/Reconciliation - 2.3.1). Set up a client and server. Have the client send inputs. Log the player's position on the server after processing each input. Verify the server's position updates based on client inputs and follows the same physics/collision rules. Intentionally send invalid inputs from the client (e.g., claiming a huge delta time or movement speed); verify the server clamps or rejects these inputs and the player's server-side position doesn't reflect the cheated values. Verify the server is broadcasting state updates containing position and sequence numbers.
+    *   **STOP & CHECK:** Confirm the server accurately processes client inputs, applies the same movement/collision logic, validates the inputs for plausibility, maintains the authoritative game state, and broadcasts this state to clients.
+
+*   #### 2.3.3 State snapshot interpolation
+    *   **Step 1:** On the client, when receiving server state updates for *other* players (not the locally controlled player), don't apply them directly to the visual representation. This would cause jerky movement as updates arrive at discrete intervals.
+    *   **Step 2:** Store the incoming state snapshots (position, rotation) for each remote player, timestamped with the time they were received (or using a server-provided timestamp). Keep a buffer of the last two (or more) snapshots.
+    *   **Step 3:** In the client's render loop, determine the ideal time for which to display the game state. This is typically slightly behind the current time to allow interpolation (e.g., `currentTime - interpolationDelay`, where `interpolationDelay` might be 100-200ms).
+    *   **Step 4:** For each remote player, find the two state snapshots from the buffer that bracket this target interpolation time.
+    *   **Step 5:** Calculate an interpolation factor (`alpha`) based on where the target time falls between the timestamps of the two snapshots.
+    *   **Step 6:** Linearly interpolate (lerp) the position and spherically interpolate (slerp) the rotation between the two snapshots using the calculated `alpha` factor. `interpolatedPosition = lerp(snapshot1.position, snapshot2.position, alpha); interpolatedRotation = slerp(snapshot1.rotation, snapshot2.rotation, alpha);`
+    *   **Step 7:** Use this interpolated position and rotation to update the visual representation (the 3D model) of the remote player in the scene for the current frame.
+    *   **Why:** Smooths out the perceived movement of other players, hiding the discrete nature of network updates and latency, resulting in a much more fluid visual experience compared to simply snapping remote players to the latest received position.
+    *   **Unit Test:** Connect two clients to the server. Move one player character (Client A). Observe that character's movement from the perspective of the other client (Client B). Verify the remote character (A as seen by B) moves smoothly between positions, rather than jumping/stuttering with each network update. Introduce artificial latency or jitter; verify interpolation still provides smooth visuals, although the perceived position will lag further behind the actual position. Log the buffered snapshots and the calculated interpolated positions to confirm the logic.
+    *   **STOP & CHECK:** Confirm that remote players' movements are visually smoothed using state snapshot interpolation, providing a fluid appearance despite network latency and discrete updates.
+
+---
+
+## Phase 3: Combat Systems
+
+**Objective:** Build the actual gameplay mechanics, focusing on shooting and damage.
+
+### 3.1 Weapon System
+
+**Goal:** Implement the core shooting mechanics.
+
+*   #### 3.1.1 Raycast-based shooting mechanism
+    *   **Step 1:** Define weapon properties (e.g., fire rate, damage, range, bullet count per shot) - potentially in the `shared` package or server configuration.
+    *   **Step 2:** On the client, detect the 'fire' input (e.g., left mouse click). Respect the weapon's fire rate (e.g., using a cooldown timer).
+    *   **Step 3:** When firing, client-side (for immediate feedback):
+        *   Determine the ray's origin (camera position or a specific muzzle point on the weapon model).
+        *   Determine the ray's direction (the camera's forward direction).
+        *   Perform a visual effect instantly (muzzle flash, sound).
+        *   Optionally, perform a *client-side* raycast against the local scene geometry and other players' *interpolated* positions. This is *only* for immediate visual feedback (e.g., bullet hole decals, impact sparks) and potentially client-side hit prediction (see 3.1.3). It does *not* determine damage.
+    *   **Step 4:** Send a 'fire' event/message to the server, including the ray origin, direction, and a timestamp or related input sequence number.
+    *   **Step 5:** On the server, upon receiving the 'fire' event:
+        *   Validate the request (e.g., Does the player have this weapon? Is the fire rate respected? Is the player alive?).
+        *   Retrieve the player's *authoritative* position and orientation at the time of the shot (potentially requiring state rewinding based on the timestamp/sequence number, see 3.1.3).
+        *   Perform an *authoritative* raycast using `THREE.Raycaster` (if using Three.js on the server) or the physics engine's raycast function, starting from the authoritative origin/direction. Set the raycaster's maximum distance based on weapon range.
+        *   Check what the ray intersects with (other players' authoritative hitboxes, map geometry).
+    *   **Why:** Raycasting is a standard, efficient way to simulate instantaneous bullet travel in FPS games. Server-side raycasting ensures authoritative hit detection, preventing clients from falsely claiming hits. Client-side effects provide immediate feedback.
+    *   **Unit Test:** Implement the client fire input and server fire event handler. On the client, verify visual/audio feedback occurs instantly on fire input. On the server, log the reception of the 'fire' event. Implement basic server-side raycasting (can log intersection results initially). Fire towards a known object (another player's server representation or map geometry); verify the server log shows the raycast intersecting the correct object. Fire into empty space; verify the server log shows no intersection or intersection at max range.
+    *   **STOP & CHECK:** Confirm client firing input triggers immediate local feedback and sends a 'fire' event. Confirm the server receives this event and performs an authoritative raycast based on the player's server-side state, correctly identifying potential targets.
+
+*   #### 3.1.2 Bullet spread/recoil patterns
+    *   **Step 1:** Define weapon-specific spread and recoil parameters (e.g., base spread angle, spread increase per shot, spread recovery rate, vertical/horizontal recoil angles per shot, recoil recovery rate). Store these with other weapon properties.
+    *   **Step 2:** Manage Recoil State (Client & Server): Maintain state variables for the current recoil level and spread angle for each player/weapon.
+    *   **Step 3:** Apply Spread (Server): When the server performs the authoritative raycast (from 3.1.1), *before* casting the ray, slightly modify the ray's direction randomly within a cone defined by the current spread angle. Increase the spread angle state after the shot, up to a maximum. Gradually decrease the spread angle over time when not firing.
+    *   **Step 4:** Apply Recoil (Client - Visual): When the player fires, apply a visual "kick" to the *client's camera* (and potentially the first-person weapon model). This is purely visual feedback. Use the recoil parameters to determine the magnitude and direction of the kick (e.g., add a temporary offset to the camera's pitch/yaw). Implement recoil recovery (camera gradually returns to normal).
+    *   **Step 5:** Apply Recoil (Server - Affecting Aim): The *actual* recoil that affects subsequent shots should ideally be handled implicitly by the fact that the client's *aim direction* sent in the next 'fire' event will naturally be slightly off due to the *client's* reaction (or lack thereof) to the visual recoil. The server simply uses the direction provided by the client (after potentially applying spread). Alternatively, the server could explicitly simulate recoil affecting the player's authoritative view direction, but this often feels less intuitive than relying on the client's aim input reflecting the recoil they experience visually. *Focus on server-side spread and client-side visual recoil first.*
+    *   **Why:** Spread adds an element of randomness and inaccuracy, especially during sustained fire. Recoil forces the player to compensate while shooting, adding a skill element to controlling the weapon. Separating visual recoil (client) from accuracy modification (server spread) provides responsiveness while maintaining server authority.
+    *   **Unit Test:** Implement spread logic on the server. Fire multiple shots rapidly at a target wall. Observe the impact points (requires server sending hit results back or debug visualization); verify they form a pattern wider than single precise shots. Implement visual recoil on the client. Fire the weapon; verify the camera view kicks upwards/sideways momentarily. Test different weapons with different spread/recoil values.
+    *   **STOP & CHECK:** Confirm server-side raycasts incorporate random spread that increases with sustained fire. Confirm the client experiences visual camera/weapon recoil upon firing.
+
+*   #### 3.1.3 Hit registration (client/server sync)
+    *   **Step 1:** The Problem: Due to latency, when the client fires and sees their crosshair over a target, the target's *authoritative* position on the server might have already moved. Simply raycasting from the shooter's current server position against the target's current server position can lead to missed shots that looked like hits on the shooter's screen ("favor the shooter" vs "favor the target" dilemma).
+    *   **Step 2:** Lag Compensation (Server-Side Rewind): When the server receives a 'fire' event with a timestamp or sequence number corresponding to the client's input time:
+        *   Estimate the latency of the shooting client (e.g., half the RTT calculated from heartbeat).
+        *   Determine the server time when the shot was actually fired (`currentTime - latency`).
+        *   Temporarily move all *other* players' authoritative hitboxes back to their *estimated* positions at that past server time. This requires storing a short history of recent player positions/states on the server.
+        *   Perform the authoritative raycast (from the shooter's rewound position) against these *rewound* target hitboxes.
+        *   Restore all players' hitboxes to their current positions after the raycast.
+    *   **Step 3:** Hit Notification: If the server's authoritative, lag-compensated raycast confirms a hit on a player:
+        *   Apply damage logic (see 3.2).
+        *   Send a 'hit_confirmed' message back to the shooting client (for hitmarker feedback).
+        *   Send necessary state updates to all relevant clients (e.g., the damaged player's new health).
+    *   **Step 4:** Client-Side Prediction (Optional Refinement): The client *can* perform its own raycast immediately upon firing (as mentioned in 3.1.1) against interpolated remote player positions. If it predicts a hit, it can show immediate feedback (hitmarker). However, this feedback *must* be considered provisional until the 'hit_confirmed' message arrives from the server. If the server denies the hit, the client might need to visually undo or clarify the feedback. Starting without predictive hitmarkers is simpler.
+    *   **Why:** Lag compensation (server-side rewind) attempts to make hit registration align with what the shooter saw on their screen at the moment they fired, mitigating the negative effects of latency and making shooting feel more accurate and fair ("favor the shooter").
+    *   **Unit Test:** (Requires Hitbox setup - 3.2.2). Set up two clients with significant simulated latency between them and the server. Have Client A shoot at Client B while Client B is moving. Observe on Client A: aim directly at B and fire. Verify if a 'hit_confirmed' message is received from the server (log it). Log the server's rewinding process: check if it correctly identifies the past positions of targets based on latency. Test edge cases: shooting at where a player *was* just moments ago should register a hit due to lag compensation.
+    *   **STOP & CHECK:** Confirm the server implements lag compensation by rewinding player positions based on shooter latency before performing the authoritative hit detection raycast. Confirm hit confirmation messages are sent back to the shooter.
+
+### 3.2 Damage Model
+
+**Goal:** Define how damage is applied and tracked.
+
+*   #### 3.2.1 Health/armor management system
+    *   **Step 1:** On the server, add `health` and `armor` properties to the authoritative player state for each connected player. Initialize these values (e.g., 100 health, 0/50/100 armor depending on game rules).
+    *   **Step 2:** Define damage absorption rules for armor (e.g., armor absorbs X% of damage, armor takes Y% of damage until depleted).
+    *   **Step 3:** When the server confirms a hit (after raycast and lag compensation) and determines the base damage amount (from weapon properties):
+        *   Calculate how much damage is absorbed by armor (if any).
+        *   Reduce the player's armor value accordingly.
+        *   Reduce the player's health value by the remaining damage.
+    *   **Step 4:** Implement logic for player death: If health drops to 0 or below, change the player's state to 'dead'. Trigger respawn logic (after a delay?), reset health/armor, potentially move to a spawn point.
+    *   **Step 5:** Send updated health and armor values to the relevant client(s) in the game state snapshots. Specifically, the player whose health/armor changed needs an immediate update. Other clients need it to update HUDs/UI.
+    *   **Step 6:** On the client, receive the updated health/armor values and display them on the HUD. Trigger visual/audio feedback for taking damage (e.g., red screen flash, pain sound). Handle the 'dead' state visually (e.g., switch to spectator mode, show respawn timer).
+    *   **Why:** Tracks the consequences of combat. Health and armor are fundamental resources, and their management defines player survivability and the objective of combat (reducing opponent's health to zero).
+    *   **Unit Test:** On the server, manually set a player's health/armor. Simulate a confirmed hit with a known damage value. Verify the armor and health values are reduced according to the defined rules. Simulate hits until health reaches zero; verify the player state changes to 'dead' and respawn logic (if implemented) is triggered. Check that state updates are sent to clients. On the client, verify the HUD updates correctly when health/armor changes, and taking damage triggers feedback. Verify death results in the appropriate visual/state change.
+    *   **STOP & CHECK:** Confirm server correctly manages player health and armor, applies damage based on rules, handles player death, and synchronizes this state with clients. Confirm client displays health/armor and provides damage/death feedback.
+
+*   #### 3.2.2 Hitbox configuration per character
+    *   **Step 1:** Instead of raycasting against the entire player model or a simple shape like a capsule, define multiple, distinct collision shapes (hitboxes) attached to the player character's skeleton/bones on the server. Common hitboxes include: head, torso, arms, legs.
+    *   **Step 2:** Use simple geometric primitives for hitboxes (e.g., spheres for head, capsules or boxes for limbs/torso) for efficient raycast intersection tests. Position and size these hitboxes to approximate the visual character model's parts.
+    *   **Step 3:** Associate different damage multipliers with each hitbox type (e.g., headshot = 2x damage, torso = 1x, limbs = 0.75x). Store these multipliers.
+    *   **Step 4:** When the server performs the authoritative raycast (during hit registration, potentially lag-compensated):
+        *   Configure the raycaster to test against this set of specific hitbox objects associated with each player, rather than a single bounding volume.
+        *   If the ray intersects one or more hitboxes, identify which hitbox was hit first (closest intersection).
+    *   **Step 5:** Retrieve the damage multiplier associated with the specific hitbox that was hit.
+    *   **Step 6:** Apply this multiplier to the weapon's base damage before calculating armor/health reduction (in 3.2.1).
+    *   **Why:** Allows for more nuanced and skill-based combat. Rewarding precision shots (like headshots) adds depth to the gameplay and differentiates player skill. Using simplified shapes for hitboxes keeps collision detection performant.
+    *   **Unit Test:** Define and visualize the hitboxes on the server (e.g., using debug rendering if possible, or logging hitbox positions). Shoot at specific parts of a target player model. Verify the server's raycast correctly identifies which hitbox was hit (head, torso, etc.) based on the ray's intersection point. Log the base damage and the applied multiplier; verify headshots apply a higher multiplier than torso shots, etc. Test shooting at gaps between hitboxes to ensure misses are registered correctly.
+    *   **STOP & CHECK:** Confirm distinct hitboxes are defined for character parts on the server, the raycast identifies the specific hitbox hit, and damage multipliers are correctly applied based on the hit location.
+
+*   #### 3.2.3 Server-side damage calculation
+    *   **Step 1:** Consolidate all damage calculation logic strictly on the server. This includes:
+        *   Receiving the 'fire' event.
+        *   Performing lag compensation/state rewinding.
+        *   Performing the authoritative raycast.
+        *   Identifying the hit location (hitbox type).
+        *   Determining base weapon damage.
+        *   Applying hitbox multipliers.
+        *   Applying damage falloff based on distance (if applicable, defined per weapon).
+        *   Calculating armor absorption/reduction.
+        *   Calculating final health reduction.
+        *   Updating the victim's authoritative health/armor state.
+        *   Checking for death.
+    *   **Step 2:** Ensure the client *never* calculates or reports damage values. The client's role is only to send input ('I fired') and receive state updates ('You were hit', 'Your health is X', 'Player Y died').
+    *   **Step 3:** Send necessary feedback messages based on the server's calculation:
+        *   'hit_confirmed' to the shooter (potentially indicating if it was a lethal hit or headshot).
+        *   'damage_taken' to the victim (including new health/armor).
+        *   'player_died' event broadcast to relevant clients (including killer/victim info).
+    *   **Why:** Critical for competitive fairness and cheat prevention. If clients calculated damage, they could easily manipulate it (god mode, one-shot kills). Centralizing all damage logic on the server ensures consistency and authority.
+    *   **Unit Test:** Review all code related to shooting and damage. Verify that *no* damage calculation (determining amounts, applying health changes) occurs on the client side based on its own actions or predictions. All health/armor modifications should stem directly from processing messages received from the server. Test scenarios under simulated latency: verify that hits confirmed by the server (using its logic) are the ones that actually affect player health, regardless of any preliminary client-side visual feedback. Attempt (conceptually) to modify client-side code to send fake damage reports; verify the server ignores them.
+    *   **STOP & CHECK:** Confirm that 100% of the damage calculation logic (from hit detection to health updates) resides and executes solely on the server. The client only sends input and receives resulting state changes.
+
+### 3.3 Match Flow
+
+**Goal:** Structure the gameplay into defined matches or rounds.
+
+*   #### 3.3.1 Round timer/countdown system
+    *   **Step 1:** On the server, define the duration of a game round (e.g., 120 seconds).
+    *   **Step 2:** Implement a server-side state machine for the match flow (e.g., `WaitingForPlayers`, `Countdown`, `InProgress`, `RoundOver`, `MatchOver`).
+    *   **Step 3:** When a match/round is ready to start (e.g., enough players connected), transition the state to `Countdown`. Start a server-side timer (e.g., 5 seconds). Broadcast the current match state and remaining countdown time to all clients.
+    *   **Step 4:** On the client, display the countdown timer prominently when the state is `Countdown`. Disable player input (movement, shooting) during the countdown.
+    *   **Step 5:** When the countdown timer reaches zero on the server, transition the state to `InProgress`. Start the main round timer. Broadcast the state change and initial round time remaining. Enable player input on the server.
+    *   **Step 6:** On the client, enable player input when the state changes to `InProgress`. Display the remaining round time, updating it based on received server updates or by synchronizing a local timer with server time.
+    *   **Step 7:** On the server, decrement the round timer continuously. Periodically broadcast the remaining time to clients to keep them synchronized.
+    *   **Step 8:** When the round timer reaches zero, transition the state to `RoundOver`. Determine the round winner based on conditions (see 3.3.3). Broadcast the result.
+    *   **Why:** Provides structure to the gameplay, creating urgency and defining the timeframe for achieving objectives. The countdown prevents players from acting before the round officially begins.
+    *   **Unit Test:** Start a match instance on the server. Verify the state progresses from `Waiting` to `Countdown`. Check client displays the countdown. Verify inputs are disabled. Check server transitions to `InProgress` after countdown. Verify round timer starts decrementing on server and updates on client HUD. Verify inputs become enabled. Let the timer run out; verify server state changes to `RoundOver` and clients are notified.
+    *   **STOP & CHECK:** Confirm the server manages match states (Countdown, InProgress, RoundOver), controls timers, disables/enables input appropriately, and synchronizes state/time with clients.
+
+*   #### 3.3.2 Score tracking (kills/deaths)
+    *   **Step 1:** On the server, add `kills` and `deaths` counters to the authoritative player state for each player, initialized to 0 at the start of a match.
+    *   **Step 2:** When the server processes a player death (as determined in 3.2.1 or 3.2.3), identify both the victim and the killer (the killer information should be available from the hit registration/damage calculation process).
+    *   **Step 3:** Increment the `deaths` counter for the victim player.
+    *   **Step 4:** If there was a killer (i.e., not an environmental death or suicide), increment the `kills` counter for the killer player. Handle suicides appropriately (e.g., increment deaths, maybe decrement kills or score).
+    *   **Step 5:** Include the current kills and deaths for players in the regular game state updates sent to clients, or send specific 'score_update' messages when changes occur.
+    *   **Step 6:** On the client, receive the score updates and display them on a scoreboard UI. The scoreboard should show kills and deaths for all players in the match. Update the HUD to show the local player's K/D ratio or score.
+    *   **Step 7:** Optionally, broadcast kill feed messages (e.g., "PlayerA eliminated PlayerB") to all clients when a kill occurs.
+    *   **Why:** Provides immediate feedback on combat success and progress towards match objectives. The scoreboard allows players to compare performance. Kill feeds enhance situational awareness.
+    *   **Unit Test:** Simulate a kill event on the server (Player A kills Player B). Verify Player A's kill count increments and Player B's death count increments on the server state. Verify state updates containing the new scores are sent to clients. On the client, check that the scoreboard display updates correctly for both players. Simulate a suicide or environmental death; verify only the death count increments.
+    *   **STOP & CHECK:** Confirm the server accurately tracks kills and deaths for each player based on gameplay events and synchronizes this score data with all clients for display on a scoreboard/HUD.
+
+*   #### 3.3.3 Victory/defeat conditions
+    *   **Step 1:** Define the conditions that end a round or match based on the game mode (e.g., for a 1v1 duel):
+        *   **Round Win:** First player to reach X kills, or the player with the most kills when the round timer expires.
+        *   **Match Win:** First player to win Y rounds.
+        *   (Alternative: Elimination mode - round ends when one player is eliminated).
+    *   **Step 2:** On the server, in the main game loop or when score/state changes:
+        *   Check if round timer has expired (handled in 3.3.1). If so, determine winner based on score.
+        *   Check if a player has reached the kill limit for the round. If so, end the round immediately and declare that player the winner.
+        *   Check if a player has won enough rounds to win the match.
+    *   **Step 3:** When a round/match win condition is met:
+        *   Transition the server state to `RoundOver` or `MatchOver`.
+        *   Determine the winner(s) and loser(s).
+        *   Broadcast the outcome message to all clients (e.g., "Player A wins the round!", "Player B wins the match!").
+        *   Stop gameplay actions (disable input, potentially freeze players).
+    *   **Step 4:** On the client, display the round/match outcome clearly when the corresponding message is received. Potentially show a post-match scoreboard.
+    *   **Step 5:** Implement logic to transition to the next round (reset scores/positions, start countdown) or return to a lobby/matchmaking state after a match concludes.
+    *   **Why:** Defines the goal of the game and provides a clear conclusion to the competitive engagement. Winning rounds/matches is the primary objective.
+    *   **Unit Test:** Configure win conditions (e.g., 3 kills to win round, 2 rounds to win match). Simulate Player A getting 3 kills; verify the server declares Round Over, Player A as winner, and notifies clients. Reset for next round. Simulate Player B winning the next round. Simulate Player A winning the third round; verify the server declares Match Over, Player A as winner, and notifies clients. Test the timer expiration condition: let the timer run out with scores A=2, B=1; verify server declares A the round winner.
+    *   **STOP & CHECK:** Confirm the server correctly evaluates defined win/loss conditions (score limits, timer expiration, round counts), transitions the match state accordingly, declares the correct winner/loser, and notifies clients of the outcome.
+
+
+# React/Express FPS Game Development Plan (Continued)
+
+---
+
+## Phase 4: Multiplayer Infrastructure
+
+**Objective:** Enable mass concurrent matches by managing players and game servers effectively.
+
+### 4.1 Matchmaking Service
+
+**Goal:** Pair players efficiently based on skill and availability across potentially many game servers.
+
+*   #### 4.1.1 Player rating (ELO) system
+    *   **Step 1:** Choose an ELO or similar rating algorithm (e.g., Glicko-2, TrueSkill). Understand its inputs (player ratings, opponent ratings, match outcome) and outputs (updated player ratings).
+    *   **Step 2:** In the server infrastructure (could be a dedicated microservice or part of the main backend, distinct from the game instance server), design a data store schema (e.g., in MongoDB or PostgreSQL) to store player profiles, including their current rating and potentially rating volatility/deviation if required by the algorithm.
+    *   **Step 3:** Implement a function/endpoint that takes the IDs and ratings of players in a completed match, along with the match outcome (who won/lost), and calculates the updated ELO ratings for each player according to the chosen algorithm.
+    *   **Step 4:** Update the players' ratings in the persistent data store after each match concludes. Ensure this update is reliable (e.g., happens even if a game server crashes after reporting the result).
+    *   **Step 5:** When a player queues for matchmaking, retrieve their current rating to use for finding suitable opponents.
+    *   **Why:** Ensures players are matched against opponents of similar skill levels, leading to more balanced and engaging matches. Tracks player progression and skill over time.
+    *   **Unit Test:** Create dummy player profiles with initial ratings. Simulate a match outcome (Player A beats Player B). Call the ELO update function with their ratings and the outcome. Verify the function returns new ratings where Player A's rating increased and Player B's decreased, according to the algorithm's expectation. Check the database to confirm the ratings were updated persistently. Test edge cases (large rating differences, draws if applicable).
+    *   **STOP & CHECK:** Confirm the system can store, retrieve, and update player skill ratings based on match outcomes using a chosen algorithm.
+
+*   #### 4.1.2 Queue management with Redis
+    *   **Step 1:** Add Redis as a dependency/service to the server infrastructure (specifically the matchmaking component). Connect to the Redis instance.
+    *   **Step 2:** Design Redis data structures for managing the queue. A sorted set (`ZSET`) is often suitable, storing player IDs as members and a score representing their matchmaking priority (e.g., a combination of ELO and time spent in queue) as the score. Different sorted sets can represent different regions or game modes.
+    *   **Step 3:** Implement logic for adding a player to the queue: Add the player's ID and their priority score to the appropriate Redis sorted set. Store additional player data (like ELO range tolerance, preferred region) perhaps in a separate Redis hash (`HSET`) keyed by player ID.
+    *   **Step 4:** Implement logic for removing a player from the queue (e.g., if they cancel matchmaking or disconnect): Remove the player ID from the sorted set and delete associated hash data.
+    *   **Step 5:** Implement the core matchmaking logic: Periodically query Redis (e.g., every few seconds) to find potential matches. Use commands like `ZRANGEBYSCORE` or iterate through the sorted set to find players with compatible scores (close ELO, potentially prioritizing longer wait times). Check compatibility based on ELO range tolerance and other criteria (region, game mode).
+    *   **Step 6:** Once a match is found (e.g., two players for a 1v1 duel), remove the matched players from the Redis queue.
+    *   **Why:** Redis provides extremely fast in-memory data structures ideal for managing dynamic queues and finding matches quickly. Sorted sets allow efficient querying for players within specific rating ranges or based on wait time.
+    *   **Unit Test:** Simulate multiple players entering the queue with different ELOs and wait times (represented by scores in the sorted set). Add them to the Redis set. Run the matchmaking logic query. Verify it correctly identifies compatible pairs based on score proximity and removes them from the set. Simulate a player cancelling; verify they are removed from Redis. Inspect Redis data directly (using `redis-cli`) during tests to confirm state changes.
+    *   **STOP & CHECK:** Confirm players can be added to, removed from, and matched via a Redis-based queue, using priority scores effectively.
+
+*   #### 4.1.3 Server load balancer integration
+    *   **Step 1:** Assume a pool of available, idle game server instances (managed by the system in 4.2). The matchmaking service needs to know which servers are ready to host a match.
+    *   **Step 2:** Implement a mechanism for game server instances to register themselves as 'available' with the matchmaking service or a central registry (e.g., writing their IP/port and status to Redis, or via a dedicated service discovery tool like Consul). The registry should track current load (player count) on active servers.
+    *   **Step 3:** When the matchmaking service successfully forms a match (from 4.1.2):
+        *   Query the registry/load balancer logic for an available game server instance with the lowest current load (or simply 'available' state).
+        *   Select an instance.
+        *   Update the selected instance's status to 'assigning' or 'in-progress' and potentially associate the matched player IDs with it temporarily.
+    *   **Step 4:** Send the connection details (IP address, port) of the assigned game server instance back to the matched players (e.g., via their existing WebSocket connection to the main backend/matchmaker).
+    *   **Step 5:** The clients then disconnect from the matchmaking service (if needed) and connect directly to the assigned game server instance.
+    *   **Why:** Distributes incoming matches across the available pool of game server instances, preventing any single instance from becoming overloaded. Ensures players are directed to a specific server ready to host their match.
+    *   **Unit Test:** Simulate available game server instances registering themselves in the registry (e.g., populating a Redis list or set). Simulate a successful match being formed. Verify the matchmaking service queries the registry, selects an available server, marks it as busy/assigned in the registry, and obtains its connection details. Verify the simulated clients receive these connection details. Check the registry again to confirm the server's status changed.
+    *   **STOP & CHECK:** Confirm the matchmaking service can identify and allocate available game server instances from a pool and provide connection details to matched players.
+
+### 4.2 Game Instance Isolation
+
+**Goal:** Run each game match in its own environment to prevent interference and facilitate scaling.
+
+*   #### 4.2.1 Dedicated Node.js process per match
+    *   **Step 1:** Refactor the core game server logic (handling WebSocket connections for a single match, running the game simulation loop, physics, authoritative state management from Phases 1-3) so it can run as a self-contained Node.js application/process.
+    *   **Step 2:** This process should accept configuration upon startup, such as the port to listen on, potentially the IDs of the players expected to connect, and any specific match settings.
+    *   **Step 3:** Implement a mechanism (e.g., a separate manager service, or scripts used by an orchestrator like Kubernetes) to launch a new instance of this Node.js game server process when required by the matchmaking service/load balancer (from 4.1.3). Pass the necessary configuration (e.g., as command-line arguments or environment variables).
+    *   **Step 4:** Ensure each process listens on a unique port or uses other mechanisms (like container networking) to avoid conflicts.
+    *   **Why:** Isolates the resources (CPU, memory) and state of each match. A crash or performance issue in one match process will not affect others. Simplifies resource allocation and management per match.
+    *   **Unit Test:** Manually launch the game server application as a standalone process, providing a specific port via command line. Verify it starts, listens on the specified port, and waits for connections. Launch a second instance on a different port; verify both run independently without conflict. Check process lists (`ps` or Task Manager) to confirm separate Node.js processes are running.
+    *   **STOP & CHECK:** Confirm the game server logic is packaged to run as an independent process and multiple instances can be launched and run concurrently without interference.
+
+*   #### 4.2.2 Process lifecycle management
+    *   **Step 1:** Implement startup logic within the game server process: register itself as 'available' with the central registry/matchmaker (see 4.1.3), initialize the game state (load map, wait for players).
+    *   **Step 2:** Implement connection handling: Accept connections only from the players assigned to this match instance. Start the game logic (countdown, etc.) once the expected players have joined.
+    *   **Step 3:** Implement shutdown logic: When a match ends (win condition met, players leave), the process should:
+        *   Report the match results (scores, ELO updates) to the persistent storage/matchmaking service.
+        *   Gracefully disconnect remaining clients.
+        *   Update its status in the central registry to 'finished' or remove itself.
+        *   Clean up its resources (e.g., close network listeners, clear intervals).
+        *   Exit the process cleanly (`process.exit(0)`).
+    *   **Step 4:** The external manager service (or orchestrator) needs to monitor these processes. It should detect when a process exits cleanly after a match and potentially decide whether to launch a new replacement process to maintain a pool of available servers.
+    *   **Why:** Ensures game servers start correctly, handle their assigned match, report results reliably, clean up after themselves, and terminate, allowing resources to be reused or released. Proper lifecycle management is key to efficient server utilization.
+    *   **Unit Test:** Launch a game server process. Simulate players connecting. Simulate match completion. Verify the process reports results (check logs or mock endpoint). Verify the process updates its status in the registry (check Redis/registry state). Verify the process eventually terminates cleanly. Check system logs or monitor output for clean exit codes.
+    *   **STOP & CHECK:** Confirm the game server process correctly manages its lifecycle from startup registration, through match execution, result reporting, cleanup, and termination.
+
+*   #### 4.2.3 Crash recovery system
+    *   **Step 1:** Implement health checks. The external manager service (or Kubernetes/orchestrator) should periodically check if the game server processes are still running and responsive. This could be a simple process check or a lightweight HTTP endpoint on the game server process that the manager probes.
+    *   **Step 2:** If the manager detects that a process has crashed unexpectedly (non-zero exit code, or unresponsive to health checks):
+        *   Log the crash event, including the match ID and players involved if known.
+        *   Mark the match as aborted or inconclusive in the persistent storage (no ELO change, or handle based on game rules).
+        *   Clean up any lingering state associated with that process in the central registry (e.g., remove its 'available' or 'in-progress' status).
+        *   Notify the involved players (if possible via another channel, or they will detect disconnection) that the match ended unexpectedly.
+        *   Launch a new replacement game server process to maintain the pool size, if configured to do so.
+    *   **Step 3:** Consider adding basic error handling and logging within the game server process itself (e.g., `try...catch` blocks around critical sections, `process.on('uncaughtException', ...)` handler) to log details about *why* it might be crashing before it exits.
+    *   **Why:** Prevents crashed game server processes from remaining in the pool or holding resources. Provides a mechanism to handle match failures gracefully and maintain overall system stability and availability. Ensures new matches can still be started even if some instances fail.
+    *   **Unit Test:** Launch a game server process. Manually kill the process (`kill -9` or equivalent). Verify the monitoring system detects the crash. Verify logs record the crash event. Verify the server's status is cleaned up from the registry. Verify (if configured) a new process is eventually launched to replace it. Intentionally introduce an uncaught exception in the game server code; verify it crashes and the recovery system handles it.
+    *   **STOP & CHECK:** Confirm the system can detect crashed game server processes, log the failure, clean up associated state, and potentially launch replacements, ensuring overall service resilience.
+
+### 4.3 State Persistence
+
+**Goal:** Store essential long-term data like player progress and match history.
+
+*   #### 4.3.1 Redis session storage
+    *   **Step 1:** Identify temporary session-related data that needs to be shared or accessed quickly, potentially across different services (e.g., matchmaking status, player preferences for the current session, pointer to the dedicated server a player is currently connected to).
+    *   **Step 2:** Use Redis (already introduced for queue management) to store this data. Employ suitable Redis data structures (Hashes `HSET`/`HGET` for player session data keyed by player ID, Sets `SADD`/`SISMEMBER` for tracking online players).
+    *   **Step 3:** Implement logic in relevant services (e.g., API backend, matchmaking service) to read from and write to Redis for session management. For instance, when a player logs in, create a session entry in Redis; when they queue, update the entry; when they disconnect, potentially remove the entry after a timeout.
+    *   **Step 4:** Configure appropriate TTL (Time To Live) expirations for session data in Redis to automatically clean up stale entries for players who disconnected improperly.
+    *   **Why:** Redis provides fast access to temporary data needed during an active user session. It's more efficient than hitting a persistent database for frequently changing, short-lived information. TTLs help manage memory usage.
+    *   **Unit Test:** Simulate a player logging in; verify a session entry is created in Redis with a TTL. Simulate the player queuing for a match; verify their session data in Redis is updated. Simulate the player joining a game; verify the session data reflects this. Wait for the TTL to expire after simulating a disconnect; verify the session data is automatically removed from Redis. Check Redis directly to confirm data presence/absence and TTLs.
+    *   **STOP & CHECK:** Confirm Redis is effectively used for storing and retrieving temporary user session data with appropriate expiration policies.
+
+*   #### 4.3.2 MongoDB match history
+    *   **Step 1:** Choose a persistent database suitable for storing structured but potentially evolving match data (MongoDB is a common choice due to its flexible schema). Add the MongoDB driver as a dependency to the service responsible for recording match results (e.g., the matchmaking service or a dedicated results service).
+    *   **Step 2:** Design a MongoDB collection schema for storing match results. Include fields like: match ID, game mode, map, start/end timestamps, list of participating players (with their IDs, pre-match ELO, post-match ELO), final scores, round details (if applicable), winner/loser information.
+    *   **Step 3:** When a game server process reports the results of a completed match (as part of its lifecycle management in 4.2.2), the receiving service should format this data according to the schema and insert it as a new document into the MongoDB match history collection.
+    *   **Step 4:** Ensure appropriate database indexes are created (e.g., on player IDs, match timestamp) to allow efficient querying later (e.g., for displaying a player's match history).
+    *   **Why:** Provides long-term storage for detailed information about completed matches. This data is essential for player history features, analysis, potential dispute resolution, and feeding into other systems like leaderboards. MongoDB's flexibility is useful if match data needs change over time.
+    *   **Unit Test:** Simulate a completed match result being reported by a game server process. Verify the receiving service correctly parses the data and inserts a corresponding document into the MongoDB 'matches' collection. Query MongoDB directly to inspect the inserted document; verify all expected fields are present and correct. Query the collection by player ID; verify the match appears in the results for the participating players.
+    *   **STOP & CHECK:** Confirm detailed match results are being reliably stored in a persistent MongoDB database with an appropriate schema.
+
+*   #### 4.3.3 Leaderboard aggregation
+    *   **Step 1:** Define the criteria for the leaderboard(s) (e.g., based on ELO rating, total kills, win rate).
+    *   **Step 2:** Choose a strategy for generating leaderboard data:
+        *   **Periodic Aggregation:** Create a scheduled background job (e.g., runs every 5 minutes or hourly) that queries the primary player data store (where ELO/stats are kept, likely SQL or MongoDB) or the match history store, aggregates the necessary data (e.g., sorts players by ELO), and writes the top N players to a dedicated leaderboard cache (Redis sorted sets are excellent for this, storing PlayerID with Score=ELO).
+        *   **Real-time Updates:** When player ratings/stats are updated (after a match), potentially update their position in the Redis leaderboard sorted set directly. This is faster but can be more complex to maintain consistency. (Start with periodic aggregation).
+    *   **Step 3:** Implement an API endpoint that clients can call to retrieve the leaderboard data. This endpoint should read directly from the optimized leaderboard cache (Redis sorted set) for fast responses.
+    *   **Step 4:** The client application should call this endpoint and display the leaderboard rankings.
+    *   **Why:** Provides a competitive overview and ranking of players based on defined metrics, driving engagement. Using a cached/pre-calculated leaderboard (like in Redis) ensures fetching rankings is fast and doesn't put heavy load on the primary databases.
+    *   **Unit Test:** Populate the player database with several players having different ELO ratings. Run the periodic aggregation job. Verify it creates/updates a sorted set in Redis containing the player IDs ranked correctly by ELO. Call the API endpoint for retrieving the leaderboard; verify it returns the expected ranked list read from Redis. Simulate a player's ELO changing significantly; run the job again; verify the Redis leaderboard and API response reflect the new ranking.
+    *   **STOP & CHECK:** Confirm a system exists to aggregate player statistics (like ELO) and generate ranked leaderboards, which can be efficiently queried via an API.
+
+---
+
+## Phase 5: Optimization & Scaling
+
+**Objective:** Achieve the target of supporting 10,000 concurrent matches by optimizing network, computation, and infrastructure.
+
+### 5.1 Network Optimization
+
+**Goal:** Reduce the amount of data sent over the network and minimize the impact of latency.
+
+*   #### 5.1.1 Delta state compression
+    *   **Step 1:** Instead of sending the complete state snapshot (position, rotation, health, etc.) for every entity in every network update, track the last acknowledged state sent to each client.
+    *   **Step 2:** When preparing the next update for a client, compare the current authoritative state with the last acknowledged state for that client.
+    *   **Step 3:** Generate a delta update containing only the fields that have *changed* since the last acknowledged state. Include a baseline sequence number or timestamp so the client knows which previous state this delta applies to.
+    *   **Step 4:** Use bitmasks or flags within the message header to indicate which fields are included in the current delta packet, avoiding the need to send field names.
+    *   **Step 5:** On the client, upon receiving a delta update, apply the changes to its local copy of the game state based on the indicated fields and the baseline sequence number.
+    *   **Why:** Drastically reduces bandwidth usage, especially for entities whose state doesn't change frequently or only changes partially between updates. Lower bandwidth usage translates to lower server costs and better performance on connections with limited bandwidth.
+    *   **Unit Test:** Implement delta state generation on the server. Log the size of a full state packet vs. a delta packet when only one property (e.g., position X) changes. Verify the client correctly reconstructs the full state by applying received delta updates sequentially. Introduce packet loss; ensure the client can recover or request a full state refresh if deltas become inapplicable due to missed packets (requires sequence numbers). Measure network traffic before and after implementing delta compression under simulated load.
+    *   **STOP & CHECK:** Confirm the server sends delta-compressed state updates containing only changed data, and the client can correctly apply these deltas to maintain an accurate game state replica, resulting in reduced bandwidth usage.
+
+*   #### 5.1.2 Packet prioritization (position > effects)
+    *   **Step 1:** Analyze the different types of messages being sent (player positions, inputs, shots fired, damage events, cosmetic events, chat messages, etc.) and categorize them by importance and latency sensitivity. Critical: Player inputs, own player corrections, positions of nearby players, shots, damage. Less critical: Cosmetic effects, distant player animations, chat.
+    *   **Step 2:** Implement multiple communication channels or message queues, potentially using different reliability mechanisms if the transport layer supports it (e.g., WebRTC offers reliable and unreliable channels, some WebSocket frameworks might allow prioritization hints).
+    *   **Step 3:** Route messages to different channels/queues based on priority. Ensure critical updates (like player positions, shots) are sent immediately via the highest priority, reliable channel.
+    *   **Step 4:** Less critical updates (like visual effects) can be sent on a lower priority channel, potentially an unreliable one (if occasional loss is acceptable), or aggregated and sent less frequently.
+    *   **Step 5:** If bandwidth is constrained (either detected or enforced via throttling - 5.1.3), prioritize sending packets from the high-priority queues and potentially drop or delay packets from lower-priority queues.
+    *   **Why:** Ensures that the most critical gameplay information (where players are, who is shooting) gets through even under network congestion or limited bandwidth, preserving the core experience at the expense of less important details.
+    *   **Unit Test:** Categorize message types. Implement prioritization logic (even if simulated by delaying less important messages). Introduce artificial network congestion or bandwidth limits. Send a mix of critical (position) and non-critical (cosmetic event) messages. Verify that position updates continue to arrive relatively consistently, while cosmetic events might be delayed or dropped, depending on the implementation. Monitor delivery rates for different message types under load.
+    *   **STOP & CHECK:** Confirm the system prioritizes sending critical gameplay data over less important information, especially under network stress or bandwidth limitations.
+
+*   #### 5.1.3 Bandwidth throttling
+    *   **Step 1:** On the server, monitor the outgoing bandwidth being used per connected client.
+    *   **Step 2:** Define configurable limits for the maximum send rate per client (e.g., in kilobytes per second). This might vary based on game state or server region.
+    *   **Step 3:** Implement a mechanism (e.g., a token bucket algorithm or simple rate limiter) within the server's network sending logic. Before sending a packet to a client, check if sending it would exceed the allocated bandwidth limit for the current time window.
+    *   **Step 4:** If the limit would be exceeded:
+        *   Queue the packet (respecting prioritization from 5.1.2).
+        *   Drop the packet (if it's low priority and dropping is acceptable).
+        *   Delay sending until the next time window allows.
+    *   **Step 5:** This is primarily a server-side control to manage overall egress bandwidth costs and ensure fair usage among clients, but can also help simulate different network conditions for testing.
+    *   **Why:** Prevents individual clients or unexpected game states from consuming excessive server bandwidth, helping to control operational costs and maintain service stability for all users. Can also improve fairness by ensuring no single player gets an unfairly high update rate.
+    *   **Unit Test:** Configure a bandwidth limit per client on the server. Send a high volume of data (e.g., many state updates) to a connected client. Monitor the actual network send rate from the server to that client using server-side monitoring or external network tools. Verify the send rate does not significantly exceed the configured limit. Observe the effect on message delivery (queuing, dropping) when the limit is hit. Test changing the limit dynamically.
+    *   **STOP & CHECK:** Confirm the server can enforce configurable bandwidth limits per client, effectively controlling outgoing traffic volume.
+
+### 5.2 Spatial Partitioning
+
+**Goal:** Reduce the computational load on the server by limiting calculations (like physics, AI, network updates) to relevant nearby entities.
+
+*   #### 5.2.1 Octree map segmentation
+    *   **Step 1:** Choose a spatial partitioning data structure suitable for 3D space. An Octree is a common choice, recursively dividing the game world into eight cubic regions (octants). Quadtrees are simpler for 2D or predominantly flat maps. Other options include Grid-based systems or BSP Trees (less common for dynamic entities).
+    *   **Step 2:** Implement the chosen data structure (e.g., an Octree class) on the server. This structure will store references to game entities (players, dynamic objects) based on their current position.
+    *   **Step 3:** When an entity moves on the server, update its position within the spatial partitioning structure. This might involve removing its reference from its old node(s) and adding it to the new node(s) corresponding to its new location. Handle entities that span multiple nodes.
+    *   **Step 4:** Implement efficient query methods for the structure, such as:
+        *   `findEntitiesInRadius(position, radius)`: Returns all entities within a certain distance of a point.
+        *   `findEntitiesInBoundingBox(box)`: Returns all entities within a specific rectangular volume.
+    *   **Why:** Organizes game entities based on their location, allowing the server to quickly find entities that are near each other without checking every single entity in the world. This is crucial for optimizing proximity-based calculations.
+    *   **Unit Test:** Create an Octree instance covering a defined world space. Add multiple simulated entities at various positions. Query the Octree for entities within a specific radius of a point; verify it returns only the entities within that radius. Move an entity across node boundaries; verify its position in the Octree is updated correctly. Query again to confirm the change. Test queries with different shapes/radii. Visualize the Octree structure and entity placement if possible for debugging.
+    *   **STOP & CHECK:** Confirm a spatial partitioning structure (like an Octree) is implemented, correctly stores entity positions, updates efficiently when entities move, and allows for fast proximity queries.
+
+*   #### 5.2.2 Interest management system
+    *   **Step 1:** Use the spatial partitioning structure (5.2.1) to implement interest management for network updates.
+    *   **Step 2:** For each connected player, determine their Area of Interest (AoI) - typically a radius or bounding box around their current position.
+    *   **Step 3:** When preparing network updates for a specific client, use the spatial structure to query for all entities within that client's AoI.
+    *   **Step 4:** Only include state updates (full or delta) for entities that fall within the client's AoI in the packet sent to that client. Do *not* send updates for entities far away that the client cannot see or interact with.
+    *   **Step 5:** Adjust the AoI size based on game needs (e.g., larger radius for players using sniper scopes, smaller in dense indoor areas). The server calculates this, not the client.
+    *   **Why:** Massively reduces the amount of network data sent to each client. Clients only receive updates about things relevant to them, significantly cutting down bandwidth and client-side processing load, especially in large worlds or with high player counts per instance. This is one of the most critical optimizations for scaling MMOs or high player-count shooters.
+    *   **Unit Test:** Place two simulated players (A and B) far apart in the world within the server's spatial structure. Place a third entity (C) near player A but far from player B. Simulate movement for entity C. Monitor the network packets conceptually sent to Player A and Player B. Verify Player A receives state updates for C, but Player B does not. Move Player B closer to A and C; verify Player B starts receiving updates for C once C enters B's AoI. Measure bandwidth reduction compared to broadcasting all updates to all clients.
+    *   **STOP & CHECK:** Confirm the server uses spatial queries to determine each client's Area of Interest and only sends network updates for entities within that AoI, significantly reducing traffic.
+
+*   #### 5.2.3 LOD model switching
+    *   **Step 1:** Create or procure multiple versions of character/object models with varying levels of detail (LODs). High-poly models for close-up views, medium-poly for mid-range, low-poly (or even impostors/billboards) for distant views. Ensure they share the same skeleton/origin for smooth transitions.
+    *   **Step 2:** On the client, determine the distance from the camera to each rendered object in the scene.
+    *   **Step 3:** Based on the distance, decide which LOD version of the model to display. Define distance thresholds for switching between LOD levels.
+    *   **Step 4:** Implement logic to smoothly switch or cross-fade between LOD meshes as the distance changes to avoid noticeable popping. This might involve temporarily rendering both and fading transparency, or ensuring vertex positions are very close at switch points.
+    *   **Step 5:** Integrate this with the animation system to ensure animations play correctly on whichever LOD mesh is currently active.
+    *   **Why:** Reduces the number of polygons the client's GPU needs to render, especially for objects far away where detail isn't noticeable. Improves client-side rendering performance (FPS), allowing more objects or higher detail close-up without sacrificing frame rate.
+    *   **Unit Test:** Load a model with multiple LODs. Render it in the client scene. Move the camera closer to and farther from the model. Verify the client switches the visible mesh to the appropriate LOD based on the distance thresholds. Use rendering stats/wireframe mode in developer tools to confirm the polygon count changes as LODs switch. Check for visual popping during transitions; tune thresholds or fading if necessary.
+    *   **STOP & CHECK:** Confirm the client dynamically switches between different Levels of Detail for models based on distance from the camera, improving rendering performance.
+
+### 5.3 Horizontal Scaling
+
+**Goal:** Distribute the game load across multiple machines or containers to handle increasing numbers of concurrent players/matches.
+
+*   #### 5.3.1 Kubernetes cluster configuration
+    *   **Step 1:** Choose a managed Kubernetes provider (e.g., GKE, EKS, AKS) or set up a self-managed cluster.
+    *   **Step 2:** Define Kubernetes Deployment or StatefulSet configurations for the game server processes (from 4.2.1). Containerize the Node.js game server application using Docker. The configuration should specify the Docker image, resource requests/limits (CPU, memory), and potentially port configurations.
+    *   **Step 3:** Configure Kubernetes Services (e.g., LoadBalancer or NodePort) or use an Ingress controller to expose the matchmaking service and potentially allocate IP/ports for game server instances if needed (network configuration depends heavily on the chosen game server networking approach - direct connection vs. proxy).
+    *   **Step 4:** Configure Kubernetes configurations for other backend services (matchmaking, API, database proxies if used).
+    *   **Step 5:** Set up logging and monitoring aggregation within the cluster (e.g., using Fluentd, Prometheus, Grafana).
+    *   **Why:** Kubernetes provides a robust platform for deploying, managing, and scaling containerized applications. It automates deployment rollouts, handles pod failures (linking to 4.2.3 crash recovery), manages networking between services, and facilitates resource allocation and auto-scaling.
+    *   **Unit Test:** Deploy the containerized game server application as a Deployment on the Kubernetes cluster with 1 replica. Verify the pod starts successfully and logs indicate readiness. Manually scale the deployment to 3 replicas; verify Kubernetes provisions two more pods. Use `kubectl get pods`, `kubectl logs`, `kubectl describe pod` to inspect the state. Delete a pod; verify Kubernetes automatically replaces it (testing self-healing).
+    *   **STOP & CHECK:** Confirm the game server application and related backend services can be deployed, managed, and replicated within a Kubernetes cluster.
+
+*   #### 5.3.2 Auto-scaling triggers (CPU/connections)
+    *   **Step 1:** Define metrics that indicate the need for more or fewer game server instances. Common metrics include:
+        *   Average CPU utilization across the game server pod pool.
+        *   Number of 'available' game server instances in the registry (from 4.1.3) falling below a threshold.
+        *   Length of the matchmaking queue (from 4.1.2) exceeding a threshold.
+        *   Number of active player connections per pod (requires custom metrics).
+    *   **Step 2:** Configure Kubernetes Horizontal Pod Autoscalers (HPAs) for the game server Deployment/StatefulSet. Define the target metric (e.g., target CPU utilization percentage) and the minimum/maximum number of replicas (pods).
+    *   **Step 3:** Alternatively, or in addition, implement custom scaling logic. A separate monitoring service could watch the matchmaking queue length or the available server pool in Redis and directly adjust the `replicas` count on the Kubernetes Deployment via the Kubernetes API when thresholds are crossed. This offers more game-specific scaling logic.
+    *   **Step 4:** Configure cluster auto-scaling if using a cloud provider (e.g., Cluster Autoscaler for GKE/EKS/AKS) to automatically add/remove underlying virtual machine nodes to the cluster based on overall resource requests from pending pods.
+    *   **Why:** Automatically adjusts the number of running game server instances based on the current player load, ensuring enough capacity during peak times while saving costs during off-peak hours. Prevents matchmaking delays due to lack of available servers.
+    *   **Unit Test:** Configure an HPA targeting CPU utilization. Run a load test that simulates increasing numbers of players connecting and engaging in gameplay, causing CPU load on the game server pods. Monitor the HPA status (`kubectl get hpa`) and the number of running pods (`kubectl get pods`). Verify the HPA detects the increased CPU load and scales up the number of replicas. Reduce the load; verify the HPA scales down the replicas towards the minimum count. Test custom scaling logic by manipulating queue length in Redis and verifying replica counts change.
+    *   **STOP & CHECK:** Confirm the system automatically scales the number of game server instances up and down based on defined metrics like CPU usage, available server pool size, or queue length.
+
+*   #### 5.3.3 Global server region deployment
+    *   **Step 1:** Identify target geographical regions based on player base location to minimize latency.
+    *   **Step 2:** Configure the cloud provider infrastructure (or Kubernetes federation/multi-cluster setup) to deploy independent instances of the entire game stack (matchmaking, game servers, supporting services) in multiple regions (e.g., US-East, EU-West, Asia-Pacific).
+    *   **Step 3:** Implement region selection logic for players. This could be:
+        *   Automatic: Ping different region endpoints from the client and connect to the one with the lowest latency.
+        *   Manual: Allow players to choose their preferred region from a list.
+    *   **Step 4:** Ensure the matchmaking service (or a global layer above it) directs players to the queue and game servers within their selected or detected region. Matchmaking should prioritize matching players within the same region.
+    *   **Step 5:** Consider database replication or sharding strategies if global state (like player profiles, global leaderboards) needs to be accessed across regions, managing consistency vs. availability trade-offs.
+    *   **Why:** Reduces latency for players by connecting them to servers physically closer to them, which is critical for a good FPS experience. Provides redundancy and resilience; an outage in one region doesn't affect others. Allows scaling capacity geographically.
+    *   **Unit Test:** Deploy the application stack to two separate regions. Configure region selection (e.g., based on client simulating connection from different locations). Verify clients connect to the matchmaking and game servers in the closest/selected region. Verify matchmaking primarily occurs within a region. Test failover: simulate an outage in one region; verify players can still connect to and play in the other region (if they select it or auto-failover is configured). Check latency differences for clients connecting to near vs. far regions.
+    *   **STOP & CHECK:** Confirm the application can be deployed and operate independently in multiple geographic regions, and players are routed to the appropriate region to minimize latency.
+
+---
+
+## Phase 6: Security & Anti-Cheat
+
+**Objective:** Maintain a fair competitive environment by deterring and detecting cheating.
+
+### 6.1 Client Hardening
+
+**Goal:** Make it more difficult for malicious actors to analyze, modify, or inject code into the client application.
+
+*   #### 6.1.1 Code obfuscation
+    *   **Step 1:** Integrate code obfuscation tools into the client build process (e.g., JavaScript Obfuscator for React code).
+    *   **Step 2:** Configure the obfuscator to rename variables, functions, and control flow obfuscation, making the transpiled JavaScript code significantly harder to read and understand for humans.
+    *   **Step 3:** Ensure the obfuscation settings do not break the application's functionality. Test thoroughly after enabling obfuscation.
+    *   **Step 4:** Apply obfuscation only to the production build, keeping development builds unobfuscated for easier debugging.
+    *   **Why:** Raises the bar for reverse engineering the client code. While not foolproof, it deters casual cheating attempts that rely on easily identifying and modifying game logic variables (e.g., health, ammo) or network message handlers.
+    *   **Unit Test:** Build the client application with obfuscation enabled. Inspect the resulting JavaScript bundle(s); verify variable/function names are mangled and the code structure is less readable compared to a non-obfuscated build. Run the application and perform standard gameplay tests (movement, shooting, UI interaction); verify all functionality remains intact despite obfuscation.
+    *   **STOP & CHECK:** Confirm client code is obfuscated in production builds, making it harder to reverse engineer, without breaking intended functionality.
+
+*   #### 6.1.2 Memory tamper detection
+    *   **Step 1:** Identify critical client-side variables whose modification could enable cheats (e.g., local player health copy, ammo count, speed multipliers, recoil values).
+    *   **Step 2:** Implement periodic checks within the client code that read these critical variables and compare them against expected values or checksums derived from trusted sources (e.g., last validated state from the server).
+    *   **Step 3:** If a discrepancy is detected (suggesting external memory modification via tools like Cheat Engine):
+        *   Log the detection event locally.
+        *   Send a report/flag to the server immediately, including details about the detected modification.
+        *   Potentially take local action, such as terminating the client application or disconnecting from the server.
+    *   **Step 4:** Interleave these checks within the game loop and obfuscate the checking logic itself to make it harder to find and disable.
+    *   **Why:** Provides a layer of detection against common cheating tools that directly modify game memory values on the client. Server reporting allows for tracking and potential banning of offenders.
+    *   **Unit Test:** (Requires a conceptual or simulated memory modification). Identify a variable being monitored. Simulate its value changing unexpectedly outside of normal game logic (e.g., manually change it in the debugger, or add test code to mimic external modification). Verify the detection mechanism triggers, logs the event, and sends a report to the server (check server logs or mock endpoint). Verify the client takes the configured local action (e.g., terminates).
+    *   **STOP & CHECK:** Confirm the client implements checks to detect tampering with critical memory variables and reports such detections to the server.
+
+*   #### 6.1.3 Input pattern analysis
+    *   **Step 1:** Collect telemetry data on the client regarding user input patterns (e.g., timing and sequence of key presses, mouse movement characteristics, click rates).
+    *   **Step 2:** Analyze this data locally (or send it to the server for analysis) to identify patterns indicative of bots or scripts (e.g., perfectly timed repetitive actions, inhumanly fast reactions, unnaturally smooth mouse movements for aimbots).
+    *   **Step 3:** Develop heuristics or simple machine learning models to flag suspicious input patterns. For example, check for consistently low variance in time between shots for automatic weapons, or mouse movements that snap instantly between targets.
+    *   **Step 4:** If suspicious patterns are detected consistently over a period, flag the client/account on the server for review or further action. Avoid immediate client-side actions based solely on this, as it can have false positives.
+    *   **Why:** Aims to detect automated cheating tools (bots, triggerbots, aimbots) by analyzing whether player inputs appear human or machine-generated. Provides another signal for server-side anti-cheat systems.
+    *   **Unit Test:** Simulate different input patterns: one mimicking normal human play (variable timing, slight inaccuracies), another mimicking a simple script (perfectly regular clicks, instant mouse snaps). Feed this data into the analysis logic. Verify the logic correctly flags the scripted input as suspicious while generally passing the human-like input. Check server logs for received flags. Tune thresholds to balance sensitivity and false positives conceptually.
+    *   **STOP & CHECK:** Confirm the client collects and analyzes input patterns to identify potentially non-human behavior, reporting suspicious findings to the server.
+
+### 6.2 Server Validation
+
+**Goal:** Implement rigorous checks on the server to detect and prevent impossible actions or states originating from potentially compromised clients.
+
+*   #### 6.2.1 Movement plausibility checks
+    *   **Step 1:** Expand on the basic server-side movement validation (from 2.3.2). Keep track of the player's authoritative position, velocity, and state (e.g., grounded, jumping) on the server.
+    *   **Step 2:** When processing a client input packet for movement, perform more detailed checks beyond simple collision:
+        *   **Speed Hacking:** Compare the implied movement distance/speed from the input against the maximum possible speed allowed by game physics (considering sprinting, buffs, etc.). Reject inputs requesting impossible speeds.
+        *   **Flying/Teleportation:** Compare the new position calculated from the input against the previously validated position. Is the distance moved vertically or horizontally feasible within the given delta time according to physics? Check if the player is grounded before allowing certain movements.
+        *   **Noclip/Wall Hacking:** Ensure the server's authoritative simulation of the move (using the same input) doesn't result in the player ending up inside solid geometry, even if the client somehow bypassed its own collision detection.
+    *   **Step 3:** If any check fails, reject the input packet, potentially log the violation, and force the client's state back to the last known valid position (reconciliation will handle this on the client).
+    *   **Why:** Catches common movement-related cheats by ensuring all player movements adhere strictly to the server's physics rules and world geometry, regardless of what the client sends. The server's physics simulation is the ultimate authority.
+    *   **Unit Test:** Simulate client input packets requesting impossible movements: moving too fast, moving large distances instantly (teleport), moving vertically while supposedly grounded (fly hack), moving into a known solid wall position. Verify the server detects these violations through its plausibility checks, rejects the inputs, logs the events, and the player's authoritative position does not update according to the invalid input.
+    *   **STOP & CHECK:** Confirm the server performs rigorous plausibility checks on received movement inputs, validating against speed limits, physics constraints, and collision geometry to prevent movement cheats.
+
+*   #### 6.2.2 Shot verification rewinding
+    *   **Step 1:** This builds directly upon Lag Compensation / Server-Side Rewind (3.1.3). Ensure the server stores a reliable, timestamped history of recent player positions and hitbox states (e.g., for the last 1-2 seconds).
+    *   **Step 2:** When verifying a shot ('fire' event from client):
+        *   Perform the lag compensation rewind: move all potential targets back to their estimated positions at the time the shooter fired.
+        *   Perform the authoritative raycast against these rewound hitboxes.
+    *   **Step 3:** Add further verification:
+        *   **Line of Sight:** Before checking hitboxes, potentially perform a preliminary raycast from the shooter's position (at fire time) towards the claimed hit position against *static map geometry only*. If this ray is blocked by a wall, the shot is impossible, regardless of hitbox positions (catches shooting through walls).
+        *   **Rate of Fire/Ammo:** Validate the shot against the server's understanding of the player's weapon state (fire rate cooldown, ammo count).
+        *   **Angle Checks:** Check if the angle between the shooter's forward direction and the direction to the hit target is within plausible limits (detects silent aim / extreme FOV aimbots).
+    *   **Why:** Ensures that registered hits are not only plausible given network latency but also physically possible according to map geometry and game rules (ammo, fire rate, view angles). Adds layers to catch more sophisticated aimbots or wallhacks.
+    *   **Unit Test:** Simulate a client firing from behind a solid wall but aiming at a target on the other side (via manipulated input). Verify the server's line-of-sight check against static geometry detects the obstruction and rejects the hit, even if lag compensation might otherwise place the target in the path. Simulate firing faster than the weapon allows; verify the server rejects the shot. Simulate hitting a target at an impossible angle (e.g., 180 degrees behind the player); verify angle checks reject it.
+    *   **STOP & CHECK:** Confirm the server verifies shots not only via lag-compensated hitbox checks but also against static geometry line-of-sight, fire rate/ammo constraints, and plausible aiming angles.
+
+*   #### 6.2.3 Rate limiting per action
+    *   **Step 1:** Identify actions clients can trigger via network messages (e.g., fire, jump, use ability, send chat message).
+    *   **Step 2:** On the server, for each player session, maintain timestamps or counters for the last time each rate-limited action was performed.
+    *   **Step 3:** Define acceptable rate limits for each action (e.g., maximum shots per second based on weapon, maximum jumps per second, max chat messages per minute).
+    *   **Step 4:** When the server receives a message requesting an action, check if the time elapsed since the last execution of that action by that player meets the minimum interval defined by the rate limit.
+    *   **Step 5:** If the action is requested too frequently (violating the rate limit), reject the request, log the event, and potentially issue a warning or temporary suspension if violations persist.
+    *   **Why:** Prevents players from spamming actions faster than humanly or mechanically possible, mitigating denial-of-service type attacks against the game logic and catching certain types of automation or packet manipulation cheats.
+    *   **Unit Test:** Define a rate limit for jumping (e.g., max once per 500ms). Simulate a client sending 'jump' requests every 100ms. Verify the server processes the first request but rejects the subsequent ones until the 500ms interval has passed. Verify rejection events are logged. Test with other actions like shooting or chat.
+    *   **STOP & CHECK:** Confirm the server enforces rate limits on various player actions to prevent spamming and detect unnatural frequencies.
+
+### 6.3 Monitoring
+
+**Goal:** Observe game activity and player behavior to identify cheating patterns and gather evidence.
+
+*   #### 6.3.1 Cheat pattern detection AI
+    *   **Step 1:** Collect detailed telemetry from game servers about player actions and performance within matches (e.g., position sequences, shot timings and outcomes, accuracy statistics, K/D ratios over time, specific action sequences). Store this data in a suitable analytics database or data lake.
+    *   **Step 2:** Develop or integrate machine learning models trained to identify statistical anomalies indicative of cheating. Examples:
+        *   Unusually high headshot percentages sustained over time.
+        *   Accuracy that doesn't decrease appropriately with range or movement.
+        *   Player position paths consistently intersecting valuable pickups just as they spawn (map hacks).
+        *   Reaction times consistently faster than human limits.
+    *   **Step 3:** Run these models periodically on the collected telemetry data. Generate reports or alerts flagging players with highly suspicious statistical profiles.
+    *   **Step 4:** Use these flags as input for human review or further investigation, rather than for automatic banning initially, due to the potential for false positives.
+    *   **Why:** Moves beyond simple rule-based detection to identify subtle or complex cheating patterns that might emerge over time or across multiple matches. Can adapt to new cheating techniques more effectively than static checks alone.
+    *   **Unit Test:** Prepare sample telemetry datasets: one representing normal gameplay, another containing artificially injected data mimicking known cheat patterns (e.g., extremely high accuracy, impossible reaction times). Feed both datasets into the detection model/logic. Verify the system flags players in the cheating dataset with high confidence while assigning low suspicion scores to players in the normal dataset. Review the generated flags/reports.
+    *   **STOP & CHECK:** Confirm a system is in place to collect detailed player telemetry and apply statistical analysis or ML models to detect suspicious patterns indicative of cheating over time.
+
+*   #### 6.3.2 Player report system
+    *   **Step 1:** Implement a feature in the client UI allowing players to report another player for suspected cheating (or other misconduct) during or after a match. Include categories for reporting (e.g., aimbot, wallhack, speedhack, griefing).
+    *   **Step 2:** When a report is submitted, send the report details (reporter ID, reported player ID, match ID, timestamp, report category, optional text comment) to a dedicated backend service/database.
+    *   **Step 3:** Create a backend tool or interface for moderators/administrators to review incoming player reports. Group reports by reported player. Correlate reports with other data (e.g., telemetry flags from 6.3.1, match replays from 6.3.3).
+    *   **Step 4:** Implement logic to track the number and frequency of reports against players. A high volume of reports from different players against the same individual can be a strong indicator requiring investigation.
+    *   **Why:** Leverages the player community to identify potential cheaters. While individual reports can be unreliable, aggregated reports provide valuable signals for moderation teams to focus their efforts.
+    *   **Unit Test:** Implement the report UI element on the client. Submit a report against a simulated player. Verify the report data is received and stored correctly in the backend database (check database directly or via a mock review tool). Submit multiple reports against the same player from different simulated reporters; verify the review tool aggregates these reports correctly.
+    *   **STOP & CHECK:** Confirm players can report suspected cheaters via the client, and these reports are collected, stored, and made available for review by moderators.
+
+*   #### 6.3.3 Match replay storage
+    *   **Step 1:** On the server, record all essential game state updates and player inputs that occur during a match. This includes initial state, player inputs over time, entity spawns/deaths, damage events, and potentially key state snapshots at regular intervals.
+    *   **Step 2:** Store this recorded data in a compressed format after the match concludes (e.g., in cloud storage like S3 or GCS, linked to the match ID in the match history database). Define a data retention policy (e.g., store replays for X days).
+    *   **Step 3:** Develop a replay viewer tool. This could be integrated into the game client or be a separate application. It needs to read the stored replay data and reconstruct the match visually, frame by frame, simulating the game state based on the recorded inputs and events.
+    *   **Step 4:** Allow players to view replays of their own past matches. Allow moderators reviewing cheat reports to load and view replays for specific matches, potentially with enhanced viewing options (free camera, slow motion, visualizing player view cones or raycasts).
+    *   **Why:** Provides definitive evidence for investigating cheat reports. Allows moderators to observe gameplay from any player's perspective (or a free camera) to confirm suspicious actions visually. Also a valuable tool for players to review their own gameplay.
+    *   **Unit Test:** Record a short match on the server, capturing inputs and key events. Verify the replay data file is generated and stored. Use the replay viewer tool to load this data file. Verify the tool can reconstruct the match visually, showing player movements and actions as they occurred during the original game. Test playback controls (pause, seek, speed). Ensure the replay accurately reflects the events logged during the match.
+    *   **STOP & CHECK:** Confirm the system records match data sufficient to reconstruct gameplay visually, stores this data, and provides a tool for viewing these replays for analysis and moderation.
+
+---
+
+## Phase 7: Polish & Launch
+
+**Objective:** Ship a stable, performant, and engaging production-ready experience.
+
+### 7.1 Performance Tuning
+
+**Goal:** Optimize client and server performance for a smooth experience under expected load.
+
+*   #### 7.1.1 Client FPS optimization
+    *   **Step 1:** Profile the client application's rendering performance using browser developer tools (Performance tab) and graphics driver tools (e.g., Nvidia Nsight, AMD RGP) or integrated engine profilers if available. Identify bottlenecks: CPU-bound (excessive JavaScript/physics, draw calls) or GPU-bound (complex shaders, high polygon counts, fill rate).
+    *   **Step 2:** Implement optimizations based on profiling:
+        *   **Reduce Draw Calls:** Use techniques like geometry instancing (for rendering many identical objects like bullet casings or foliage) and mesh batching/merging (combining multiple static meshes into one).
+        *   **Optimize Shaders:** Simplify complex shader calculations, especially for distant objects. Use cheaper shader variations where possible.
+        *   **Optimize Scene Graph:** Reduce the complexity of the Three.js scene graph traversal.
+        *   **CPU Optimizations:** Optimize JavaScript game loop logic, physics calculations (if client-side), UI updates. Use Web Workers for heavy computations off the main thread.
+        *   **Asset Optimization:** Ensure textures are appropriately sized and compressed (e.g., use Basis Universal texture compression). Ensure LODs (5.2.3) are effective.
+    *   **Step 3:** Continuously measure FPS on target hardware specifications (minimum and recommended) under typical gameplay conditions. Aim for a stable target frame rate (e.g., 60 FPS).
+    *   **Why:** Ensures the game runs smoothly on a wider range of player hardware, providing a responsive and visually pleasing experience, which is critical for player retention, especially in a fast-paced FPS.
+    *   **Unit Test:** Establish baseline FPS measurements on target hardware. Implement an optimization technique (e.g., geometry instancing for particle effects). Re-measure FPS under the same conditions. Verify a measurable improvement in frame rate or reduction in CPU/GPU load according to profiling tools. Repeat for different bottlenecks and optimization strategies.
+    *   **STOP & CHECK:** Confirm client-side performance has been profiled, bottlenecks identified, and optimizations implemented to achieve target FPS on specified hardware.
+
+*   #### 7.1.2 Server tick rate calibration
+    *   **Step 1:** Define the server's "tick rate" - how many times per second the main game simulation loop runs (processing inputs, updating physics, checking game rules). Common rates for FPS games range from 20Hz to 64Hz or even 128Hz.
+    *   **Step 2:** Configure the server's main loop to run at the desired fixed interval (e.g., using `setInterval` with careful drift management, or a more precise loop).
+    *   **Step 3:** Measure the actual time taken to complete one full server tick under expected load (e.g., with the maximum number of players per instance). Use server-side profiling tools.
+    *   **Step 4:** Adjust the tick rate based on performance:
+        *   If a single tick takes longer than the interval allocated (e.g., tick takes 20ms but rate is 64Hz = 15.6ms interval), the server cannot keep up. Lower the tick rate or optimize the tick processing logic.
+        *   If ticks complete much faster than the interval, consider potentially increasing the tick rate for smoother simulation and lower latency, *if* server CPU resources allow and network updates can keep pace.
+    *   **Step 5:** Balance tick rate against CPU cost and network traffic implications. Higher tick rates provide better simulation fidelity but consume more CPU and potentially require more frequent network updates.
+    *   **Why:** The server tick rate determines the granularity and responsiveness of the authoritative game simulation. A stable and appropriately calibrated tick rate is essential for consistent physics, accurate hit registration, and fair gameplay. Running below the target rate causes server lag.
+    *   **Unit Test:** Configure a target tick rate (e.g., 30Hz). Instrument the server loop to measure the duration of each tick. Run the server under simulated load (max players, active gameplay). Log the tick durations over time. Verify the average tick duration is consistently below the allocated interval (e.g., < 33.3ms for 30Hz). Check for excessive spikes in tick duration. Adjust rate/optimizations and re-test until stable.
+    *   **STOP & CHECK:** Confirm the server tick rate is set and the server can consistently execute its game loop within the allocated time per tick under expected load conditions.
+
+*   #### 7.1.3 Database indexing
+    *   **Step 1:** Analyze common database query patterns used by the application (e.g., fetching player profiles by ID or username, querying match history for a specific player, looking up leaderboard ranks, querying Redis queues).
+    *   **Step 2:** For persistent databases (MongoDB, PostgreSQL), define and create database indexes on the fields frequently used in query `WHERE` clauses, `JOIN` conditions, or `ORDER BY` clauses. Use database-specific tools (`explain analyze` in SQL, `explain()` in MongoDB) to analyze query performance and identify missing or inefficient indexes.
+    *   **Step 3:** For Redis, ensure appropriate data structures are used (e.g., using Hashes for lookup by ID, Sorted Sets for range queries/ranking, Sets for membership checks) as Redis performance relies heavily on choosing the right structure for the access pattern. Avoid commands that require scanning large portions of the keyspace (like `KEYS *`) in production code.
+    *   **Step 4:** Re-evaluate indexes periodically, especially after changes in query patterns or significant data growth. Monitor slow query logs.
+    *   **Why:** Database queries without proper indexes require scanning large amounts of data, leading to slow API responses, high database load, and bottlenecks under pressure. Correct indexing is crucial for database performance and application responsiveness.
+    *   **Unit Test:** Identify a slow database query (e.g., fetching a player's match history without an index on player ID). Measure its execution time under realistic data volume. Add the appropriate index (e.g., `createIndex({ "players.playerId": 1 })` on the matches collection). Run the same query again. Verify a significant reduction in execution time using the database's `explain` plan or timing logs. Check Redis command latencies for key operations.
+    *   **STOP & CHECK:** Confirm critical database queries (SQL, NoSQL, Redis) are supported by appropriate indexes or data structures, resulting in efficient query execution times.
+
+### 7.2 Progression Systems
+
+**Goal:** Add features that encourage players to continue playing over the long term.
+
+*   #### 7.2.1 Player profiles
+    *   **Step 1:** Expand the persistent player data store (e.g., MongoDB or SQL database from 4.1.1) to include fields for player profiles beyond just ELO rating. Examples: username, registration date, total playtime, overall K/D ratio, favorite weapon, unlocked cosmetics (references), selected avatar/banner.
+    *   **Step 2:** Implement backend API endpoints for:
+        *   Creating a profile (on user registration).
+        *   Retrieving a player's profile data (for display in the client).
+        *   Updating profile data (e.g., when stats change after a match, when cosmetics are equipped).
+    *   **Step 3:** In the client UI, create a dedicated section where players can view their own profile (stats, equipped items) and potentially view the basic profiles of other players (username, level, key stats).
+    *   **Step 4:** Ensure profile data is updated reliably after matches or relevant events.
+    *   **Why:** Gives players a persistent identity within the game, allows them to track their progress and stats, and provides a canvas for displaying achievements and customization. Forms the foundation for other progression systems.
+    *   **Unit Test:** Create a new user account. Verify a corresponding player profile document/row is created in the database with default values. Call the API to retrieve the profile; check the data matches. Simulate completing a match; verify relevant stats (playtime, K/D) are updated in the database and retrievable via the API. Test updating equipped cosmetics via the API and verify the change persists. View the profile in the client UI.
+    *   **STOP & CHECK:** Confirm players have persistent profiles storing stats and customization choices, accessible via API and visible in the client UI.
+
+*   #### 7.2.2 Cosmetic unlock system
+    *   **Step 1:** Design a system for unlocking cosmetic items (e.g., weapon skins, character outfits, banner icons). Define unlock criteria: reaching a certain player level, completing specific challenges/achievements (7.2.3), direct purchase (if applicable), random drops.
+    *   **Step 2:** Create a database schema to represent the available cosmetic items (ID, name, type, rarity, asset path) and another schema to track which items each player has unlocked (e.g., a list/array of unlocked item IDs within the player profile document, or a separate join table).
+    *   **Step 3:** Implement server-side logic to check unlock conditions. When a condition is met (e.g., player levels up, achievement completed), grant the corresponding cosmetic item(s) by updating the player's unlocked items list in the database.
+    *   **Step 4:** Modify the player profile API (7.2.1) to include the list of unlocked cosmetics.
+    *   **Step 5:** In the client UI, create an 'inventory' or 'customization' screen where players can view their unlocked cosmetics and select which ones to equip. The client should fetch the list of unlocked items via the API.
+    *   **Step 6:** Update the rendering logic to load and apply the selected cosmetic assets (skins, models) to the player character, weapons, or UI elements based on the player's saved choices in their profile.
+    *   **Why:** Provides players with personalization options and long-term goals, encouraging continued play to unlock desired items. Cosmetics are a common and effective monetization strategy if desired, without affecting gameplay balance (pay-to-win).
+    *   **Unit Test:** Define a sample cosmetic item unlocked at level 5. Simulate a player reaching level 5. Verify the server logic grants the item and updates the player's unlocked list in the database. Call the profile API; verify the item appears in the unlocked list. In the client UI, verify the item appears in the inventory. Equip the item; verify the choice is saved to the profile and the corresponding visual asset is loaded and applied in-game.
+    *   **STOP & CHECK:** Confirm a system exists for players to unlock cosmetic items based on defined criteria, manage their inventory, equip items, and see those choices reflected visually in-game.
+
+*   #### 7.2.3 Achievement tracking
+    *   **Step 1:** Define a list of achievements or challenges with specific criteria (e.g., "Win 10 matches", "Get 100 headshots", "Play on every map", "Get a kill with every weapon"). Assign rewards for completing achievements (e.g., experience points, currency, specific cosmetic items).
+    *   **Step 2:** Design a database schema to store the definition of each achievement (ID, name, description, criteria, rewards) and track the progress/completion status for each player (e.g., within the player profile, store a map of achievement IDs to current progress count or completion timestamp).
+    *   **Step 3:** Implement server-side logic to track player actions relevant to achievement criteria during gameplay (kills, headshots, wins, map played, weapon used). After a match or when specific events occur, check if any achievement criteria have been met or progressed.
+    *   **Step 4:** When an achievement's criteria are fully met, update the player's status for that achievement to 'completed' in the database and grant any associated rewards (update XP, currency, or call the cosmetic unlock logic from 7.2.2). Notify the client.
+    *   **Step 5:** In the client UI, create an 'Achievements' section displaying all available achievements, the player's progress towards them, and completed ones. Show a notification pop-up when an achievement is completed in real-time.
+    *   **Why:** Provides players with structured short-term and long-term goals beyond simply winning matches. Offers concrete objectives to strive for, rewarding different playstyles and milestones, increasing engagement and playtime.
+    *   **Unit Test:** Define an achievement "Get 5 headshots". Simulate a player getting 3 headshots in a match; verify their progress for that achievement is updated to 3 in the database. Simulate getting 2 more headshots in the next match; verify the achievement status changes to 'completed', rewards (if any) are granted, and the client receives a notification. Check the achievement list UI on the client to confirm the updated status.
+    *   **STOP & CHECK:** Confirm a system tracks player progress towards defined achievements, grants rewards upon completion, and displays achievement status/progress to the player in the UI.
+
+### 7.3 Launch Prep
+
+**Goal:** Ensure the game and infrastructure are ready for the expected load and potential issues of a public launch.
+
+*   #### 7.3.1 Load testing (20k concurrent sim)
+    *   **Step 1:** Choose or develop a load testing tool capable of simulating a large number of concurrent game clients connecting and performing typical actions (e.g., k6 with WebSocket support, custom-built simulators). Target simulating load equivalent to 20k concurrent users (double the initial target for headroom).
+    *   **Step 2:** Configure the test environment to be as close to production as possible (same Kubernetes cluster setup, database tiers, network configuration).
+    *   **Step 3:** Design realistic load test scenarios: Simulate player login/authentication, queuing for matchmaking, connecting to game instances, sending movement inputs, firing weapons, taking damage, and completing matches. Gradually ramp up the number of simulated users.
+    *   **Step 4:** Run the load tests while closely monitoring key metrics across the entire stack:
+        *   Server CPU/Memory utilization (game servers, matchmaking, API).
+        *   Network I/O and bandwidth usage.
+        *   Database performance (query latency, connection pool usage, CPU/IOPS).
+        *   Redis performance (latency, memory usage).
+        *   Matchmaking queue times and success rates.
+        *   Game server tick rate stability.
+        *   Error rates across all services.
+        *   Auto-scaling behavior (did pods/nodes scale up as expected?).
+    *   **Step 5:** Identify bottlenecks and breaking points under load. Optimize the bottlenecks (code, configuration, infrastructure) and re-run tests until the system can handle the target load (20k simulated users) while maintaining acceptable performance (e.g., stable tick rate, low matchmaking times, low error rates).
+    *   **Why:** Simulates real-world launch conditions to uncover performance bottlenecks, scaling issues, and potential failure points *before* actual players experience them. Essential for ensuring the infrastructure can handle the expected (and unexpected) load.
+    *   **Unit Test:** Execute the designed load test scenario, ramping up to 20k simulated concurrent users. Monitor the key performance indicators (KPIs) dashboard. Verify that server tick rates remain stable, matchmaking completes quickly, database/Redis latencies stay low, error rates are minimal, and auto-scaling functions correctly. If KPIs degrade unacceptably, the test fails, requiring optimization and re-testing.
+    *   **STOP & CHECK:** Confirm the entire system has undergone rigorous load testing simulating 20k concurrent users and can maintain stable performance and availability under that load.
+
+*   #### 7.3.2 Failover systems
+    *   **Step 1:** Review critical components of the infrastructure (databases, Redis instances, matchmaking service, API endpoints, Kubernetes control plane).
+    *   **Step 2:** Ensure high availability (HA) configurations are in place:
+        *   **Databases/Redis:** Use managed cloud provider services with built-in replication and automatic failover across multiple availability zones (AZs). If self-hosting, configure primary/replica setups with health checks and automated failover mechanisms (e.g., Redis Sentinel, Patroni for PostgreSQL).
+        *   **Stateless Services (API, Matchmaking):** Run multiple instances (replicas) behind a load balancer spread across multiple AZs within Kubernetes. Kubernetes handles pod failures automatically.
+        *   **Game Servers:** Already designed for failure via process isolation and crash recovery (4.2.3). Ensure the management/orchestration layer effectively replaces failed instances.
+        *   **Region Failover (Optional but Recommended):** If multiple regions (5.3.3) are deployed, configure DNS routing (e.g., latency-based routing, health-check-based failover) so clients can be directed to a healthy region if their primary region experiences a major outage.
+    *   **Step 3:** Conduct failover tests (chaos engineering): Intentionally terminate database primary nodes, Redis masters, or entire availability zones in a staging environment. Verify that the system automatically fails over to replicas/standby instances or healthy AZs/regions with minimal disruption to simulated user sessions. Measure recovery time objective (RTO).
+    *   **Why:** Minimizes downtime and data loss in the event of hardware failures, network issues, or zone/region outages. Ensures the game remains available and playable even when individual components fail.
+    *   **Unit Test:** In a staging environment, simulate the failure of a critical component (e.g., terminate the primary database instance). Monitor the system's response. Verify that the failover mechanism activates (e.g., replica is promoted). Verify that application services reconnect to the new primary and functionality is restored. Measure the time taken for recovery. Test failure of a whole AZ if possible.
+    *   **STOP & CHECK:** Confirm critical infrastructure components are configured for high availability and automatic failover, and these mechanisms have been tested to ensure they function correctly during simulated failures.
+
+*   #### 7.3.3 Monitoring dashboards
+    *   **Step 1:** Consolidate key metrics from all parts of the system (client errors/performance via telemetry, server application metrics, Kubernetes metrics, database performance, network traffic, load balancer stats, matchmaking queue lengths) into a centralized monitoring system (e.g., Prometheus/Grafana, Datadog, New Relic).
+    *   **Step 2:** Create comprehensive dashboards tailored for different roles:
+        *   **Operations/SRE:** High-level overview of system health, resource utilization (CPU/mem/network/disk), error rates, latency, auto-scaling activity, database status, regional health.
+        *   **Game Developers:** Application-specific metrics like server tick rate stability, matchmaking times, player concurrency per instance, specific game event rates, anti-cheat flags.
+        *   **Business/Management:** Key Performance Indicators like Daily Active Users (DAU), Concurrent Users (CCU), Match Completion Rate, Player Retention Cohorts, (if applicable) Revenue.
+    *   **Step 3:** Configure alerting rules based on critical thresholds in the monitoring system (e.g., high error rates, low available game server pool, high latency, database connection issues, server tick rate dropping). Define notification channels (e.g., PagerDuty, Slack, Email) for different severity levels.
+    *   **Step 4:** Ensure the dashboards and alerts are tested and understood by the team who will be on-call during launch and ongoing operation.
+    *   **Why:** Provides real-time visibility into the health and performance of the entire system. Enables quick detection of issues, faster troubleshooting, and informed decision-making during launch and beyond. Alerts proactively notify the team of problems before they escalate significantly.
+    *   **Unit Test:** Review the created dashboards. Verify they display relevant, up-to-date metrics from all key system components. Trigger a test alert condition (e.g., manually spike CPU load, inject errors); verify the monitoring system detects it and sends an alert via the configured channel within an acceptable time frame. Ensure dashboard data correlates with known system states during load tests or failover tests.
+    *   **STOP & CHECK:** Confirm comprehensive monitoring dashboards and proactive alerting systems are in place, providing real-time visibility into system health and performance, and have been tested.
+
+
+## Critical Path Dependencies
+
+*   **Must Complete First:**
+    *   **Network Foundation (Phase 1.3):** Absolutely essential. All real-time multiplayer aspects (movement sync, shooting, state updates, matchmaking) rely on a functioning WebSocket connection, message handling, and potentially the heartbeat system. Without this, no client-server interaction is possible.
+    *   **Movement Engine (Phase 2.2):** Foundational for any player action. Combat systems (Phase 3) inherently require players to be able to move and aim within the game world. Networked state (Phase 2.3) is tightly coupled with the movement engine to synchronize these actions.
+
+*   **Parallel Development:**
+    *   **Core Rendering System (Phase 1.2) vs Network Foundation (Phase 1.3):** These can be developed largely independently initially. One team/effort can focus on getting the visual client running (rendering the scene, models), while another focuses on establishing the basic client-server communication link. They merge when needing to display networked entities.
+    *   **Matchmaking Service (Phase 4.1) vs Game Instance Isolation (Phase 4.2):** The system for finding opponents can be designed and built separately from the system that actually runs individual game matches. Their integration point is when the matchmaking service needs to request a new game instance from the isolation/management system.
+    *   **Avatar System (Phase 2.1) vs Movement Engine (Phase 2.2):** While related, loading and animating a character model can progress in parallel with implementing the core WASD/mouse input and collision logic. They are integrated when the movement logic needs to drive the character's position and trigger the appropriate animations ('run', 'idle').
+
+*   **Final Integration:**
+    *   **Combine Combat + Movement + Networking:** This is the core gameplay loop integration. Server-side validation (2.3.2) needs the movement engine (2.2). Hit registration (3.1.3) needs networked state (2.3) for lag compensation and the weapon system (3.1) for raycasting. Damage (3.2) relies on successful hit registration. This integration happens throughout Phases 2 and 3.
+    *   **Connect Matchmaking to Game Instances:** The output of the Matchmaking Service (Phase 4.1) - a pair or group of matched players - must be used to trigger the creation or allocation of a dedicated Game Instance (Phase 4.2). Players need to be directed to connect to the correct instance endpoint. This happens in Phase 4.
+
+## Key Technical Risks & Mitigation
+
+*   **Networking Bottlenecks:**
+    *   **Risk:** High player counts or complex state updates consume excessive server bandwidth or CPU for serialization/deserialization, leading to lag and high operational costs. JSON serialization can be particularly CPU intensive at scale.
+    *   **Mitigation:**
+        *   **Binary Protocols:** Implement efficient binary serialization formats (e.g., MessagePack, Protocol Buffers, or a custom format) early, especially for high-frequency messages like position updates. Use the `shared` package to define schemas. (Phase 5.1)
+        *   **Delta Compression:** Only send changes in state rather than the full state snapshot each time. (Phase 5.1)
+        *   **Packet Prioritization:** Ensure critical data (player position, shots fired) gets priority over less critical data (cosmetic effects). (Phase 5.1)
+        *   **Profiling:** Regularly profile network traffic volume and server CPU usage related to networking.
+
+*   **State Desynchronization:**
+    *   **Risk:** Discrepancies arise between the client's predicted state, the server's authoritative state, and what other clients observe, leading to jerky movement (rubber-banding), missed shots, and unfair gameplay.
+    *   **Mitigation:**
+        *   **Robust Reconciliation:** Implement client-side prediction and server reconciliation (Phase 2.3.1) from the beginning for player movement. Ensure the client correctly re-applies inputs after receiving server corrections.
+        *   **Lag Compensation:** Implement server-side rewind (Phase 3.1.3) for hit detection to align server checks with the shooter's perspective.
+        *   **Shared Logic:** Use the `shared` package for physics constants, collision rules, or even movement functions if feasible, to minimize logic differences between client prediction and server validation.
+        *   **Interpolation:** Use state snapshot interpolation (Phase 2.3.3) for remote entities to visually smooth over minor discrepancies and network jitter.
+        *   **Debugging Tools:** Implement tools to visualize server authoritative positions vs. client predicted positions and interpolation results.
+
+*   **Scaling Costs:**
+    *   **Risk:** Supporting a large number of concurrent matches (10k+) requires significant server resources (CPU, RAM, bandwidth), leading to high hosting costs. Inefficient resource usage can make scaling prohibitively expensive.
+    *   **Mitigation:**
+        *   **Efficient Instance Management:** Use dedicated processes per match (Phase 4.2) but ensure they are lightweight. Optimize Node.js memory usage.
+        *   **Cloud Architecture:** Design for horizontal scaling using container orchestration (Kubernetes - Phase 5.3) or serverless functions where applicable.
+        *   **Spot Instances:** Utilize cheaper spot instances in cloud providers for game servers, combined with robust instance lifecycle management and failover (Phase 4.2, Phase 7.3) to handle potential interruptions.
+        *   **Resource Optimization:** Implement server-side optimizations like spatial partitioning/interest management (Phase 5.2) to reduce CPU load per player. Aggressively optimize network traffic (Phase 5.1).
+        *   **Database Choices:** Use appropriate databases for different needs (e.g., Redis for fast session/queue data - Phase 4.1/4.3, MongoDB for flexible match history - Phase 4.3). Ensure proper indexing (Phase 7.1).
+        *   **Load Testing:** Perform realistic load testing early and often (Phase 7.3) to identify bottlenecks and cost drivers before launch.
