@@ -3,158 +3,151 @@ description:
 globs: 
 alwaysApply: true
 ---
+Okay, here's the project progress report reset to the beginning, with all tasks marked as pending [ ] and estimated progress set to 0%.
 
-# Project Progress
+Project Progress (JavaScript Version - Reset)
+Phase 1: Foundation Setup [Status: Not Started] (Estimated 0%)
+Objective: Create the skeleton
 
-## Phase 1: Foundation Setup [Status: Completed] (Estimated 100%)
+[ ] Project Infrastructure
+- [ ] Set up monorepo with workspaces (client/server/shared)
+- [ ] Configure module resolution/paths for cross-package imports (using relative paths, bundler aliases, or Node.js resolution)
+- [ ] Create CI/CD pipeline for testing/builds (linting with ESLint, potential bundling)
 
-### Objective: Create the skeleton
+[ ] Core Rendering System (Three.js)
+- [ ] Initialize Three.js scene with WebGL renderer
+- [ ] Create viewport management system (resize handling)
+- [ ] Set up basic lighting/shadow system
 
-**[x] Project Infrastructure**
-    - [x] Set up monorepo with workspaces (client/server/shared)
-    - [x] Configure TypeScript paths for cross-package imports
-    - [x] Create CI/CD pipeline for testing/builds
+[ ] Physics Engine Setup (Rapier)
+- [ ] Initialize identical Rapier Worlds (client/server)
+- [ ] Load shared map physics geometry (client/server)
+- [ ] Setup physics simulation loop (world.step())
 
-**[x] Core Rendering System**
-    - [x] Initialize Three.js scene with WebGL renderer
-    - [x] Create viewport management system (resize handling)
-    - [x] Set up basic lighting/shadow system
+[ ] Network Foundation (Socket.io) (Critical Path)
+- [ ] Establish WebSocket connection protocol (Socket.io)
+- [ ] Create message serialization/deserialization layer (e.g., JSON)
+- [ ] Implement basic heartbeat/ping system
 
-**[x] Network Foundation** (Critical Path) - Updated Estimate: 100%
-    - [x] Establish WebSocket connection protocol
-    - [x] Create message serialization/deserialization layer
-    - [x] Implement basic heartbeat/ping system
+Phase 2: Player Systems [Status: Not Started] (Estimated 0%)
+Objective: Create the core interaction layer
 
----
+[ ] Avatar System (Three.js & JS Logic)
+- [ ] GLB character loader with animation mapping (AnimationMixer)
+- [ ] First-person camera rig (arms/weapon view attached to camera)
+- [ ] Third-person spectator camera
 
-## Phase 2: Player Systems [Status: In Progress] (Estimated ~10%)
+[ ] Movement Engine (Vanilla JS, Rapier) (Critical Path)
+- [ ] WASD keyboard input handler (addEventListener)
+- [ ] Mouse look controller (pitch/yaw, Pointer Lock API)
+- [ ] Collision detection with map geometry (using Rapier physics)
 
-### Objective: Create the core interaction layer
+[ ] Networked State (Socket.io, Rapier, JS Logic)
+- [ ] Client prediction/reconciliation system (client steps local Rapier world, server receives inputs)
+- [ ] Server-side movement validation (server steps authoritative Rapier world)
+- [ ] State snapshot interpolation (Smoothing remote player movement)
 
-**[/] Avatar System**
-    - [x] GLB character loader with animation mapping
-    - [/] First-person camera rig (arms/weapon view) // Camera attached, viewmodel pending
-    - [x] Third-person spectator camera // Added toggle
+Phase 3: Combat Systems [Status: Not Started] (0%)
+Objective: Build the actual gameplay mechanics (1v1 Focus)
 
-**[/] Movement Engine** (Critical Path) // Mark as In Progress
-    - [x] WASD keyboard input handler // Basic implementation done
-    - [x] Mouse look controller (pitch/yaw) // Added Pointer Lock
-    - [x] Collision detection with map geometry // Multi-ray, slope handling, jump physics added
+[ ] Weapon System (Rapier Raycasting, JS Logic)
+- [ ] Rapier-based raycast/shape-cast shooting mechanism
+- [ ] Bullet spread/recoil patterns (affecting ray or physics forces)
+- [ ] Hit registration (client sends intent, server validates via Rapier raycast)
 
-**[/] Networked State** // Mark as In Progress
-    - [/] Client prediction/reconciliation system // Client prediction implemented, server receiving inputs
-    - [/] Server-side movement validation // Basic input processing and state update implemented
-    - [ ] State snapshot interpolation
+[ ] Damage Model (Server JS Logic, Rapier Hitboxes)
+- [ ] Health/armor management system (server-side JS variables)
+- [ ] Hitbox configuration (using Rapier colliders) per character
+- [ ] Server-side damage calculation (based on validated Rapier hits)
 
----
+[ ] Match Flow (Server JS Logic, 1v1 Format)
+- [ ] Round timer/countdown system (setTimeout/setInterval)
+- [ ] Score tracking (kills/deaths/rounds)
+- [ ] Victory/defeat conditions (e.g., first to X rounds)
 
-## Phase 3: Combat Systems [Status: Not Started] (0%)
+Phase 4: Multiplayer Infrastructure [Status: Not Started] (0%)
+Objective: Enable mass concurrent 1v1 matches
 
-### Objective: Build the actual gameplay mechanics
+[ ] Matchmaking Service (Node.js Logic)
+- [ ] Player rating (ELO) system (JS logic)
+- [ ] Queue management (JS array or Redis via Node client)
+- [ ] Server load balancer integration (Infrastructure level)
 
-**[ ] Weapon System**
-    - [ ] Raycast-based shooting mechanism
-    - [ ] Bullet spread/recoil patterns
-    - [ ] Hit registration (client/server sync)
+[ ] Game Instance Isolation (Node.js)
+- [ ] Dedicated Node.js process per match (child_process or worker_threads)
+- [ ] Process lifecycle management (JS scripts)
+- [ ] Crash recovery system (JS monitoring logic)
 
-**[ ] Damage Model**
-    - [ ] Health/armor management system
-    - [ ] Hitbox configuration per character
-    - [ ] Server-side damage calculation
+[ ] State Persistence (DBs via JS Clients)
+- [ ] Redis session storage (Node Redis client)
+- [ ] MongoDB match history (Node MongoDB client)
+- [ ] Leaderboard aggregation (JS logic or DB query)
 
-**[ ] Match Flow**
-    - [ ] Round timer/countdown system
-    - [ ] Score tracking (kills/deaths)
-    - [ ] Victory/defeat conditions
+Phase 5: Optimization & Scaling [Status: Not Started] (0%)
+Objective: Achieve target concurrent matches
 
----
+[ ] Network Optimization
+- [ ] Delta state compression (JS object comparison)
+- [ ] Packet prioritization (Socket.io logic)
+- [ ] Bandwidth throttling (Server-side controls)
 
-## Phase 4: Multiplayer Infrastructure [Status: Not Started] (0%)
+[ ] Spatial Partitioning / Interest Management (Rapier Queries)
+- [ ] Map segmentation logic (if needed for large maps)
+- [ ] Interest management system (server sends relevant updates only)
+- [ ] LOD model switching (Three.js)
 
-### Objective: Enable mass concurrent matches
+[ ] Horizontal Scaling (Infrastructure)
+- [ ] Containerization (Docker for Node.js app)
+- [ ] Kubernetes cluster configuration
+- [ ] Auto-scaling triggers (CPU/connections/memory)
+- [ ] Global server region deployment
 
-**[ ] Matchmaking Service**
-    - [ ] Player rating (ELO) system
-    - [ ] Queue management with Redis
-    - [ ] Server load balancer integration
+Phase 6: Security & Anti-Cheat [Status: Not Started] (0%)
+Objective: Maintain fair competitive environment
 
-**[ ] Game Instance Isolation**
-    - [ ] Dedicated Node.js process per match
-    - [ ] Process lifecycle management
-    - [ ] Crash recovery system
+[ ] Client Hardening
+- [ ] JavaScript code obfuscation/minification (Build step)
+- [ ] (Advanced) Memory tamper detection research
+- [ ] Input pattern analysis research
 
-**[ ] State Persistence**
-    - [ ] Redis session storage
-    - [ ] MongoDB match history
-    - [ ] Leaderboard aggregation
+[ ] Server Validation (Authoritative Rapier & JS Logic)
+- [ ] Movement plausibility checks (validating against server Rapier simulation)
+- [ ] Shot verification rewinding (using server Rapier raycasts & history)
+- [ ] Rate limiting per action (JS logic)
 
----
+[ ] Monitoring
+- [ ] Cheat pattern detection analysis (Logging and manual/AI review)
+- [ ] Player report system (Simple endpoint and UI)
+- [ ] Match replay data storage (Saving inputs/state snapshots)
 
-## Phase 5: Optimization & Scaling [Status: Not Started] (0%)
+Phase 7: Polish & Launch [Status: Not Started] (0%)
+Objective: Ship production-ready 1v1 experience
 
-### Objective: Achieve 10k concurrent matches
+[ ] Performance Tuning
+- [ ] Client FPS optimization (JS, Three.js, Rapier tuning)
+- [ ] Server tick rate calibration (Node.js / Rapier performance)
+- [ ] Database indexing/query optimization
 
-**[ ] Network Optimization**
-    - [ ] Delta state compression
-    - [ ] Packet prioritization (position > effects)
-    - [ ] Bandwidth throttling
+[ ] UI/UX Polish (Vanilla JS/HTML/CSS)
+- [ ] HUD refinement
+- [ ] Menu system implementation
+- [ ] Sound effects / Visual feedback
 
-**[ ] Spatial Partitioning**
-    - [ ] Octree map segmentation
-    - [ ] Interest management system
-    - [ ] LOD model switching
+[ ] Progression Systems (JS Logic & DB)
+- [ ] Player profiles / Stats display
+- [ ] Cosmetic unlock system (if applicable)
+- [ ] Achievement tracking
 
-**[ ] Horizontal Scaling**
-    - [ ] Kubernetes cluster configuration
-    - [ ] Auto-scaling triggers (CPU/connections)
-    - [ ] Global server region deployment
+[ ] Launch Prep
+- [ ] Load testing (Simulating target concurrent 1v1 matches)
+- [ ] Failover systems testing
+- [ ] Monitoring dashboards setup
 
----
+Legend:
 
-## Phase 6: Security & Anti-Cheat [Status: Not Started] (0%)
+[ ]: Pending
 
-### Objective: Maintain fair competitive environment
+[/]: In Progress
 
-**[ ] Client Hardening**
-    - [ ] Code obfuscation
-    - [ ] Memory tamper detection
-    - [ ] Input pattern analysis
-
-**[ ] Server Validation**
-    - [ ] Movement plausibility checks
-    - [ ] Shot verification rewinding
-    - [ ] Rate limiting per action
-
-**[ ] Monitoring**
-    - [ ] Cheat pattern detection AI
-    - [ ] Player report system
-    - [ ] Match replay storage
-
----
-
-## Phase 7: Polish & Launch [Status: Not Started] (0%)
-
-### Objective: Ship production-ready experience
-
-**[ ] Performance Tuning**
-    - [ ] Client FPS optimization
-    - [ ] Server tick rate calibration
-    - [ ] Database indexing
-
-**[ ] Progression Systems**
-    - [ ] Player profiles
-    - [ ] Cosmetic unlock system
-    - [ ] Achievement tracking
-
-**[ ] Launch Prep**
-    - [ ] Load testing (20k concurrent sim)
-    - [ ] Failover systems
-    - [ ] Monitoring dashboards
-
----
-
-**Legend:**
-- `[ ]`: Pending
-- `[/]`: In Progress
-- `[x]`: Completed
-- `[-]`: Blocked
+[x]: Completed
+[-]: Blocked

@@ -3,239 +3,246 @@ description:
 globs: 
 alwaysApply: true
 ---
+Okay, here's the project plan revised to use plain JavaScript instead of TypeScript. The core architecture (Three.js for rendering, Rapier for physics, Socket.io for networking) remains the same, but the language specifics are adjusted.
+
+Project Plan: 1v1 Multiplayer FPS Duel (Three.js + Rapier + Socket.io - Plain JavaScript)
+
+Core Technologies:
+
+Client-Side: Three.js (WebGL Rendering ONLY), Rapier (Client-Side Physics: Prediction & Collision), Socket.io-client (Networking), Vanilla JavaScript (Logic, DOM Manipulation, ES Modules)
+
+Server-Side: Node.js, Socket.io (Networking), Rapier (Authoritative Server-Side Physics: Validation & Simulation), Plain JavaScript (Server Logic, ES Modules or CommonJS), Potentially Redis/MongoDB (State/Persistence)
+
+Shared: JavaScript Modules (for common constants, utility functions, potentially map geometry data structures)
+
 Phase 1: Foundation Setup
 
-Objective: Create the skeleton that all other systems will plug into
+Objective: Create the core structure for rendering, authoritative physics, and networking using JavaScript.
 
-    Project Infrastructure
+Tasks:
 
-        Set up monorepo with workspaces (client/server/shared)
+Project Infrastructure:
 
-        Configure TypeScript paths for cross-package imports
+Set up monorepo (e.g., using npm/yarn workspaces) for client/, server/, shared/ packages.
 
-        Create CI/CD pipeline for testing/builds
-        Why: Ensures consistent environment for all components
+Configure project structure for clear module imports between packages (using relative paths or potentially bundler path aliases if using one).
 
-    Core Rendering System
+Establish basic CI/CD pipeline (e.g., GitHub Actions) for linting (ESLint), testing, and potentially client-side bundling/minification.
 
-        Initialize Three.js scene with WebGL renderer
+Why: Ensures a consistent development environment and facilitates code sharing using standard JavaScript modules.
 
-        Create viewport management system (resize handling)
+Core Rendering (Three.js):
 
-        Set up basic lighting/shadow system
-        Why: Must render 3D space before adding gameplay
+Initialize Three.js Scene, PerspectiveCamera, and WebGLRenderer using JavaScript.
 
-    Network Foundation
+Append renderer's canvas to DOM using standard JavaScript DOM APIs.
 
-        Establish WebSocket connection protocol
+Implement viewport resizing listeners (window.addEventListener('resize', ...)) using JavaScript.
 
-        Create message serialization/deserialization layer
+Set up basic scene lighting and shadow mapping in Three.js.
 
-        Implement basic heartbeat/ping system
-        Why: Real-time networking is the game's backbone
+Why: Provides the visual output. Three.js is strictly for rendering based on data from Rapier and game state.
+
+Physics Engine Setup (Rapier):
+
+Initialize identical Rapier World instances on both client (browser JS) and server (Node.js) using the appropriate Rapier JavaScript bindings.
+
+Load Map Physics Geometry: Both client and server MUST load the exact same map geometry data (e.g., plain JS objects/arrays representing vertices/indices, or loading from a common format). On the server, create Rapier Collider shapes for authoritative boundaries. On the client, create identical shapes for prediction. This data could be defined in the shared/ directory.
+
+Set up the physics simulation loop (world.step()) using JavaScript's setInterval or requestAnimationFrame (client) / setInterval (server).
+
+Why: Rapier manages ALL physics. Server-side map geometry is critical for authoritative validation. Using plain JavaScript for Rapier interactions.
+
+Network Foundation (Socket.io):
+
+Set up Socket.io server and client instances using their standard JavaScript libraries.
+
+Define basic message types (e.g., using string constants or simple objects defined in shared/). Create serialization/deserialization functions (JSON is standard; potentially explore binary options later if needed).
+
+Implement a heartbeat/ping-pong mechanism.
+
+Why: Establishes the real-time communication channel.
 
 Phase 2: Player Systems
 
-Objective: Create the core interaction layer
+Objective: Implement player representation, physics-driven movement, and networked synchronization using JavaScript.
 
-    Avatar System
+Tasks:
 
-        GLB character loader with animation mapping
+Avatar System (Three.js & JS Logic):
 
-        First-person camera rig (arms/weapon view)
+Load 3D character models (GLB/glTF) using Three.js GLTFLoader in JavaScript.
 
-        Third-person spectator camera
-        Why: Players need visual representation
+Implement animation playback (AnimationMixer) based on player state variables (e.g., isIdle, isRunning).
 
-    Movement Engine
+First-Person Camera Rig: Create the FPV setup using JavaScript. Attach animated character arms to the currently equipped weapon model (Three.js objects). Parent this combined arm-weapon mesh to the Three.js camera.
 
-        WASD keyboard input handler
+Create a third-person camera controller (optional).
 
-        Mouse look controller (pitch/yaw)
+Why: Provides player visual representation and the immersive FPV view using JavaScript logic to manage the scene graph.
 
-        Collision detection with map geometry
-        Why: Foundational for all gameplay actions
+Movement Engine (Vanilla JS, Rapier, Socket.io):
 
-    Networked State
+Capture keyboard/mouse input using standard browser event listeners (window.addEventListener, document.addEventListener).
 
-        Client prediction/reconciliation system
+Apply forces/impulses/velocity changes to the player's Rapier RigidBody or KinematicCharacterController using Rapier's JavaScript API.
 
-        Server-side movement validation
+Collision Detection: Handle collisions strictly within the Rapier physics world.
 
-        State snapshot interpolation
-        Why: Makes movement feel responsive yet cheat-resistant
+Visual Update: In the render loop (requestAnimationFrame), update the Three.js avatar and FPV rig's position/rotation to match the state read from the Rapier physics body's JavaScript object representation.
+
+Why: Enables physics-based movement, handled by Rapier, controlled via JavaScript.
+
+Networked State (Socket.io, Rapier, JS Logic):
+
+Client sends inputs (plain JS objects) via Socket.io. Client predicts movement by stepping its local Rapier world via JavaScript calls.
+
+Server receives inputs, validates them against its authoritative Rapier simulation and map geometry using JavaScript logic.
+
+Server broadcasts authoritative Rapier physics states (plain JS objects containing position, rotation, etc.) and game states.
+
+Client reconciles its predicted Rapier state with the server's authoritative state (comparing JS object values) and interpolates remote player Rapier states for smooth rendering.
+
+Why: Creates responsive movement via client prediction, while server retains full authority using Rapier physics accessed via JavaScript.
 
 Phase 3: Combat Systems
 
-Objective: Build the actual gameplay mechanics
+Objective: Introduce core shooting and damage mechanics for the 1v1 duel using JavaScript.
 
-    Weapon System
+Tasks:
 
-        Raycast-based shooting mechanism
+Weapon System (Three.js Visuals, Rapier Physics/Raycasting, Socket.io, JS Logic):
 
-        Bullet spread/recoil patterns
+Implement shooting logic in JavaScript triggered by input.
 
-        Hit registration (client/server sync)
-        Why: Core of FPS gameplay loop
+Use Rapier's JavaScript API for raycasting/shape-casting from the player's camera/weapon position (derived from Rapier body state).
 
-    Damage Model
+Simulate spread/recoil effects using JavaScript logic to modify ray direction or apply forces via Rapier's JS API.
 
-        Health/armor management system
+Send hit intent/results (plain JS objects) to the server.
 
-        Hitbox configuration per character
+Server performs authoritative raycast validation within its Rapier world using Rapier's JS API, including lag compensation logic written in JavaScript.
 
-        Server-side damage calculation
-        Why: Critical for competitive fairness
+Why: Defines the primary interaction, ensuring hit detection is physics-based via Rapier, controlled and validated using JavaScript.
 
-    Match Flow
+Damage Model (Server JS Logic, Rapier Hitboxes):
 
-        Round timer/countdown system
+Implement server-side health/armor state management using JavaScript variables/objects.
 
-        Score tracking (kills/deaths)
+Define hitboxes using Rapier Collider shapes created via the JS API, attached to the player's Rapier body.
 
-        Victory/defeat conditions
-        Why: Structures the 1v1 duel format
+Server calculates damage in JavaScript based on validated hits against Rapier hitboxes.
+
+Broadcast damage/health updates (JS objects). Client displays feedback via DOM manipulation using vanilla JavaScript.
+
+Why: Determines combat outcomes based on physics-defined hit locations, calculated authoritatively on the server using JavaScript logic.
+
+Match Flow (Server JS Logic, Client UI via DOM):
+
+Implement server-side round timers/countdowns using JavaScript's setTimeout/setInterval.
+
+Track scores using JavaScript variables/objects on the server.
+
+Define victory/defeat conditions in JavaScript logic.
+
+Broadcast match state updates. Client updates HTML HUD elements using vanilla JavaScript DOM manipulation.
+
+Why: Structures the 1v1 duel format using server-side JavaScript logic.
 
 Phase 4: Multiplayer Infrastructure
 
-Objective: Enable mass concurrent matches
+Objective: Scale the system to handle multiple concurrent 1v1 matches using JavaScript on the backend.
 
-    Matchmaking Service
+Tasks:
 
-        Player rating (ELO) system
+Matchmaking Service (Node.js Logic, potentially Redis):
 
-        Queue management with Redis
+Implement rating system (ELO) logic in JavaScript.
 
-        Server load balancer integration
-        Why: Efficiently pairs players across scale
+Create a queue system (e.g., using JavaScript arrays or a Redis client library for Node.js).
 
-    Game Instance Isolation
+Match players using JavaScript logic.
 
-        Dedicated Node.js process per match
+Assign matched pair to an available game instance.
 
-        Process lifecycle management
+Why: Efficiently pairs players for 1v1 matches using JavaScript server logic.
 
-        Crash recovery system
-        Why: Prevents match failures from cascading
+Game Instance Isolation (Node.js):
 
-    State Persistence
+Design the Node.js server (written in JavaScript) to run multiple, independent game instances (e.g., via child_process or worker_threads).
 
-        Redis session storage
+Implement management logic in JavaScript.
 
-        MongoDB match history
+Develop basic crash recovery in JavaScript.
 
-        Leaderboard aggregation
-        Why: Maintains competitive integrity
+Why: Isolates individual duels using standard Node.js features.
+
+State Persistence (Redis, MongoDB with JS Clients):
+
+Use Redis/MongoDB Node.js client libraries to interact with databases from your JavaScript server code.
+
+Store session data, match history, and player stats.
+
+Implement leaderboard aggregation logic in JavaScript (server-side or via database queries).
+
+Why: Maintains persistence using standard database interactions from JavaScript.
 
 Phase 5: Optimization & Scaling
 
-Objective: Achieve 10k concurrent matches
+Objective: Enhance performance for many concurrent 1v1 duels, optimizing JavaScript execution where needed.
 
-    Network Optimization
+Tasks:
 
-        Delta state compression
+Network Optimization: (Same core concepts - Delta compression, Prioritization, Bandwidth throttling) Implement using JavaScript data manipulation and Socket.io configurations.
 
-        Packet prioritization (position > effects)
+Spatial Partitioning / Interest Management: Implement algorithms in JavaScript using Rapier's query API.
 
-        Bandwidth throttling
-        Why: Reduces server bandwidth costs
-
-    Spatial Partitioning
-
-        Octree map segmentation
-
-        Interest management system
-
-        LOD model switching
-        Why: Limits unnecessary computations
-
-    Horizontal Scaling
-
-        Kubernetes cluster configuration
-
-        Auto-scaling triggers (CPU/connections)
-
-        Global server region deployment
-        Why: Distributes load across hardware
+Horizontal Scaling: (Same infrastructure concepts - Docker, Kubernetes, etc.) The application running inside containers is Node.js executing JavaScript.
 
 Phase 6: Security & Anti-Cheat
 
-Objective: Maintain fair competitive environment
+Objective: Maintain fair play in the 1v1 competitive environment, validating actions within the JavaScript server logic.
 
-    Client Hardening
+Tasks:
 
-        Code obfuscation
+Client Hardening: Apply JavaScript obfuscation/minification via build tools.
 
-        Memory tamper detection
+Server Validation (Server JS Logic, Rapier):
 
-        Input pattern analysis
-        Why: Deters casual cheating
+Implement strict server-side validation of all player actions within your JavaScript code.
 
-    Server Validation
+Movement Plausibility: Use Rapier's JS API on the server to simulate requested moves and check for collisions against the authoritative map geometry. Write JavaScript checks for speed limits, etc.
 
-        Movement plausibility checks
+Shot Verification: Use server-side Rapier raycasting via its JS API with lag compensation logic written in JavaScript.
 
-        Shot verification rewinding
+Implement rate limiting in JavaScript.
 
-        Rate limiting per action
-        Why: Catches impossible player actions
+Why: Leverages the server's authoritative Rapier physics (accessed via JS) and custom JavaScript logic as the ground truth. Requires careful validation as JavaScript lacks compile-time type safety.
 
-    Monitoring
-
-        Cheat pattern detection AI
-
-        Player report system
-
-        Match replay storage
-        Why: Enables post-match analysis
+Monitoring & Reporting: Implement logging and reporting endpoints using JavaScript server code.
 
 Phase 7: Polish & Launch
 
-Objective: Ship production-ready experience
+Objective: Ship a production-ready 1v1 FPS duel experience using JavaScript.
 
-    Performance Tuning
+Tasks:
 
-        Client FPS optimization
+Performance Tuning: Profile client-side JavaScript execution and rendering (browser dev tools), server-side Node.js performance, and Rapier simulation steps (both sides). Optimize critical JavaScript code paths.
 
-        Server tick rate calibration
+UI & UX Polish: Refine HUD/menus using clean HTML/CSS and efficient vanilla JavaScript DOM manipulation.
 
-        Database indexing
-        Why: Ensures smooth player experience
+Progression & Engagement: Implement systems using server-side JavaScript logic and client-side JavaScript for UI updates.
 
-    Progression Systems
+Launch Preparation: Conduct load testing, test failover, set up monitoring for the Node.js/JavaScript application stack.
 
-        Player profiles
+Critical Path Dependencies: (Same fundamental dependencies, implemented in JavaScript)
 
-        Cosmetic unlock system
+Network Foundation
 
-        Achievement tracking
-        Why: Drives long-term engagement
+Physics Engine Setup (Client & Server with identical Map Geometry via JS)
 
-    Launch Prep
+Core Rendering Setup
 
-        Load testing (20k concurrent sim)
+Physics-Driven Movement Engine (reliant on Physics Setup, coded in JS)
 
-        Failover systems
-
-        Monitoring dashboards
-        Why: Confirms scale readiness
-
-Critical Path Dependencies
-
-    Must Complete First:
-
-        Network Foundation → All multiplayer features depend on this
-
-        Movement Engine → Required for combat systems
-
-    Parallel Development:
-
-        3D Rendering vs Network Systems
-
-        Matchmaking vs Game Instance Logic
-
-    Final Integration:
-
-        Combine combat + movement + networking
-
-        Connect matchmaking to game instances
+This plan now reflects the use of plain JavaScript throughout the stack where applicable (client logic, server logic, shared utilities), while still leveraging the specialized libraries (Three.js, Rapier, Socket.io) via their JavaScript APIs. Remember that robust testing and clear code conventions become even more critical without TypeScript's static analysis.
