@@ -3,246 +3,356 @@ description:
 globs: 
 alwaysApply: true
 ---
-Okay, here's the project plan revised to use plain JavaScript instead of TypeScript. The core architecture (Three.js for rendering, Rapier for physics, Socket.io for networking) remains the same, but the language specifics are adjusted.
+Okay, here is the development plan updated to incorporate the new features (multiple maps, character selection, dual guns, grenades, grapple gun) while maintaining the requested format.
 
-Project Plan: 1v1 Multiplayer FPS Duel (Three.js + Rapier + Socket.io - Plain JavaScript)
+Refactored 1v1 FPS Game Development Plan (Integration Focused - With Feature Additions)
 
-Core Technologies:
+Core Technologies: Next.js (Client Host), React (Client Component), Three.js (Client Rendering), RapierJS (Client/Server Physics), Socket.io (Client <-> Game Instance Networking), Node.js/JavaScript (Game Instance Server), Anchor/Solana (Integration for Escrow/Results).
 
-Client-Side: Three.js (WebGL Rendering ONLY), Rapier (Client-Side Physics: Prediction & Collision), Socket.io-client (Networking), Vanilla JavaScript (Logic, DOM Manipulation, ES Modules)
+Platform Dependencies: Assumes existence of Game Server Manager, Matchmaking Service, Platform API (for results reporting), Solana Programs (Escrow, Profile), Redis Registry, Shared Types package.
 
-Server-Side: Node.js, Socket.io (Networking), Rapier (Authoritative Server-Side Physics: Validation & Simulation), Plain JavaScript (Server Logic, ES Modules or CommonJS), Potentially Redis/MongoDB (State/Persistence)
+New Features: Multiple Random Maps, 3 Character Choices (Stats/Abilities, Shared Anims), Dual Guns, Grenade System (Frag, Semtex, Flash), Grapple Gun.
 
-Shared: JavaScript Modules (for common constants, utility functions, potentially map geometry data structures)
+Phase 1: Foundational FPS Module Setup (Integration Aware)
 
-Phase 1: Foundation Setup
+Objective: Create the specific skeleton for the FPS game instance server and client component, ready to plug into the platform, incorporating foundations for new features.
 
-Objective: Create the core structure for rendering, authoritative physics, and networking using JavaScript.
+1.1 FPS Game Package & Basic Structure
 
-Tasks:
+Goal: Establish the dedicated codebase locations and initial setup for the FPS game server instance and client component within the platform's monorepo.
 
-Project Infrastructure:
+1.1.1 Setup FPS Server Instance Package (packages/game-server-fps)
 
-Set up monorepo (e.g., using npm/yarn workspaces) for client/, server/, shared/ packages.
+Step Outline: Create package directory, npm init, add core dependencies (Node.js basics, Socket.io, RapierJS, Anchor client libs, three for math, @/shared-types), create main script gameInstance_fps.js with basic structure anticipating map/char state.
 
-Configure project structure for clear module imports between packages (using relative paths or potentially bundler path aliases if using one).
+Why: Isolates FPS-specific server code, manageable and deployable unit.
 
-Establish basic CI/CD pipeline (e.g., GitHub Actions) for linting (ESLint), testing, and potentially client-side bundling/minification.
+Unit Test: Verify package created, dependencies installed. Basic script runs without crashing.
 
-Why: Ensures a consistent development environment and facilitates code sharing using standard JavaScript modules.
+STOP & CHECK: Dedicated Node.js package for the FPS game server instance exists.
 
-Core Rendering (Three.js):
+1.1.2 Setup FPS Client Component (apps/web/components/games/fps/)
 
-Initialize Three.js Scene, PerspectiveCamera, and WebGLRenderer using JavaScript.
+Step Outline: Create directory structure (GameViewFPS.jsx). Install client dependencies (three, rapier-js, socket.io-client). Define component structure accepting props including mapId, localPlayerCharacterId, opponentPlayerCharacterId. Add placeholders for game state, asset refs.
 
-Append renderer's canvas to DOM using standard JavaScript DOM APIs.
+Why: Encapsulates client-side FPS logic within the main web app. Props provide necessary context (map/char choice).
 
-Implement viewport resizing listeners (window.addEventListener('resize', ...)) using JavaScript.
+Unit Test: Basic GameViewFPS.jsx component created. Renders placeholder content within a Next.js page without errors when given mock props.
 
-Set up basic scene lighting and shadow mapping in Three.js.
+STOP & CHECK: Dedicated directory and placeholder React component for the FPS game client exist.
 
-Why: Provides the visual output. Three.js is strictly for rendering based on data from Rapier and game state.
+1.1.3 Define FPS-Specific Shared Types (@/shared-types)
 
-Physics Engine Setup (Rapier):
+Step Outline: Add/Define constants and interfaces/typedefs for MapId, MapConfigFPS (incl. physics, spawns), CharacterId, CharacterConfigFPS (incl. health/shield, ability), WeaponConfigFPS (incl. ammo), GrenadeType, GrenadeConfigFPS, AbilityType, AbilityConfigFPS. Update PlayerInputFPS (keys for new actions). Update PlayerStateFPS (shield, charId, grenades, ability cooldown, weapon slots/ammo, grapple state). Define new MessageTypeFPS (switch weapon, reload, throw grenade, use ability, grapple actions, state updates).
 
-Initialize identical Rapier World instances on both client (browser JS) and server (Node.js) using the appropriate Rapier JavaScript bindings.
+Why: Ensures type consistency for expanded state, config, and network messages between server and client.
 
-Load Map Physics Geometry: Both client and server MUST load the exact same map geometry data (e.g., plain JS objects/arrays representing vertices/indices, or loading from a common format). On the server, create Rapier Collider shapes for authoritative boundaries. On the client, create identical shapes for prediction. This data could be defined in the shared/ directory.
+Unit Test: Define sample types/constants. Verify importability/usage in server and client code without errors.
 
-Set up the physics simulation loop (world.step()) using JavaScript's setInterval or requestAnimationFrame (client) / setInterval (server).
+STOP & CHECK: Comprehensive FPS-specific types/configs reflecting new features are defined in the shared types package.
 
-Why: Rapier manages ALL physics. Server-side map geometry is critical for authoritative validation. Using plain JavaScript for Rapier interactions.
+1.2 Core Instance Initialization & Platform Communication
 
-Network Foundation (Socket.io):
+Goal: Enable the FPS game server instance to start, parse arguments including map/char, initialize systems based on config, and communicate readiness.
 
-Set up Socket.io server and client instances using their standard JavaScript libraries.
+1.2.1 Implement Standard Argument Parsing (gameInstance_fps.js)
 
-Define basic message types (e.g., using string constants or simple objects defined in shared/). Create serialization/deserialization functions (JSON is standard; potentially explore binary options later if needed).
+Step Outline: Use yargs to parse required args: port, matchId, mapId, player IDs/Wallets, player charIds, serverAuthorityKeyPath, rpcUrl, program IDs, etc. Store in config object. Add choices validation for mapId/charId.
 
-Implement a heartbeat/ping-pong mechanism.
+Why: Allows Game Server Manager to launch instances with specific map/character context.
 
-Why: Establishes the real-time communication channel.
+Unit Test: Launch with sample args including map/char IDs. Verify correct parsing/logging. Test error handling for missing/invalid map/char IDs.
 
-Phase 2: Player Systems
+STOP & CHECK: FPS game instance script correctly parses and utilizes startup arguments including mapId and player charIds.
 
-Objective: Implement player representation, physics-driven movement, and networked synchronization using JavaScript.
+1.2.2 Initialize Core Server Systems (Socket.io, Rapier) (gameInstance_fps.js)
 
-Tasks:
+Step Outline: Initialize Rapier world. Call loadMapPhysics(config.mapId) using MAP_CONFIGS_FPS to load correct colliders/spawns. Call initializePlayerStates() using config.playersInfo and CHARACTER_CONFIG_FPS to set up players object with initial health/shield, ability, default weapons/grenades. Initialize Socket.io server, add basic connection handler (map sockets to players, send initial state).
 
-Avatar System (Three.js & JS Logic):
+Why: Sets up networking and physics based on the specific map. Pre-initializes player state according to character choices.
 
-Load 3D character models (GLB/glTF) using Three.js GLTFLoader in JavaScript.
+Unit Test: Start instance. Verify Rapier init, correct map physics loaded, player states initialized correctly (health/shield/etc.), Socket.io listening. Connect clients; verify initial state sent.
 
-Implement animation playback (AnimationMixer) based on player state variables (e.g., isIdle, isRunning).
+STOP & CHECK: Socket.io server and Rapier world with map-specific physics are initialized. Player states are initialized based on character selection.
 
-First-Person Camera Rig: Create the FPV setup using JavaScript. Attach animated character arms to the currently equipped weapon model (Three.js objects). Parent this combined arm-weapon mesh to the Three.js camera.
+1.2.3 Implement Platform Readiness Communication (gameInstance_fps.js)
 
-Create a third-person camera controller (optional).
+Step Outline: After Socket.io is listening (requires listener setup in 1.2.2), use IPC/API to send READY message.
 
-Why: Provides player visual representation and the immersive FPV view using JavaScript logic to manage the scene graph.
+Why: Signals platform that the instance is fully configured for the specific map/players and ready for connections.
 
-Movement Engine (Vanilla JS, Rapier, Socket.io):
+Unit Test: Launch via spawner. Verify READY message received by spawner after Socket.io starts listening. Check Redis registry update.
 
-Capture keyboard/mouse input using standard browser event listeners (window.addEventListener, document.addEventListener).
+STOP & CHECK: FPS game instance successfully reports 'READY' status after initializing map/player state and starting listener.
 
-Apply forces/impulses/velocity changes to the player's Rapier RigidBody or KinematicCharacterController using Rapier's JavaScript API.
+1.3 Core Client Component Setup & Connection
 
-Collision Detection: Handle collisions strictly within the Rapier physics world.
+Goal: Enable the FPS client to initialize rendering/physics for the specific map/characters and connect.
 
-Visual Update: In the render loop (requestAnimationFrame), update the Three.js avatar and FPV rig's position/rotation to match the state read from the Rapier physics body's JavaScript object representation.
+1.3.1 Initialize Client Systems (Three.js, Rapier) (GameViewFPS.jsx)
 
-Why: Enables physics-based movement, handled by Rapier, controlled via JavaScript.
+Step Outline: In useEffect: Access mapConfig/charConfig via props. Initialize Three.js. Load map visual GLB (mapConfig.visualAssetPath). Load shared character GLB, clone for local/remote, setup mixers. Load FPV GLBs for each weapon type (WEAPON_CONFIG_FPS). Load grapple visuals (e.g., line material). Initialize client Rapier world. Load map physics colliders matching server (mapConfig.physicsData). Setup render loop structure (placeholders for update logic). Implement cleanup.
 
-Networked State (Socket.io, Rapier, JS Logic):
+Why: Sets up client rendering/physics tailored to the specific map. Loads all necessary visual assets for map, characters, weapons, grapple.
 
-Client sends inputs (plain JS objects) via Socket.io. Client predicts movement by stepping its local Rapier world via JavaScript calls.
+Unit Test: Mount component. Verify map/char/weapon assets loaded (console/network). Verify Rapier initialized with correct map colliders. Check cleanup.
 
-Server receives inputs, validates them against its authoritative Rapier simulation and map geometry using JavaScript logic.
+STOP & CHECK: Client component initializes Three.js/Rapier with correct map visuals/physics, loads shared character, FPV weapons, and grapple assets.
 
-Server broadcasts authoritative Rapier physics states (plain JS objects containing position, rotation, etc.) and game states.
+1.3.2 Establish Game Instance Connection (GameViewFPS.jsx)
 
-Client reconciles its predicted Rapier state with the server's authoritative state (comparing JS object values) and interpolates remote player Rapier states for smooth rendering.
+Step Outline: In useEffect, use socket.io-client to connect to instance. Add listeners for connect, disconnect, error, and GAME_STATE_FPS. Store received state in component's currentGameState state variable. Disconnect on cleanup.
 
-Why: Creates responsive movement via client prediction, while server retains full authority using Rapier physics accessed via JavaScript.
+Why: Connects client to server. Sets up the handler to receive and store authoritative game state.
 
-Phase 3: Combat Systems
+Unit Test: Connect client to running instance. Verify connection success. Verify initial GAME_STATE_FPS received and updates currentGameState. Test disconnect.
 
-Objective: Introduce core shooting and damage mechanics for the 1v1 duel using JavaScript.
+STOP & CHECK: Client component connects to server instance and updates its local currentGameState upon receiving server messages.
 
-Tasks:
+1.3.3 Basic State Synchronization Placeholder (GameViewFPS.jsx, gameInstance_fps.js)
 
-Weapon System (Three.js Visuals, Rapier Physics/Raycasting, Socket.io, JS Logic):
+Step Outline: Server: Define getFullGameStatePayload() including mapId, character details, initial health/shield, default loadouts, etc. Send this payload upon client connection (in 1.2.2). Client: Listener from 1.3.2 populates currentGameState. Periodic broadcast loop deferred to Phase 3.
 
-Implement shooting logic in JavaScript triggered by input.
+Why: Ensures client receives a complete initial state reflecting map/character choices and default loadouts. Defers constant updates until match starts.
 
-Use Rapier's JavaScript API for raycasting/shape-casting from the player's camera/weapon position (derived from Rapier body state).
+Unit Test: Connect client. Log initial currentGameState on client; verify it contains correct map/char/loadout info sent by server.
 
-Simulate spread/recoil effects using JavaScript logic to modify ray direction or apply forces via Rapier's JS API.
+STOP & CHECK: Client receives and stores comprehensive initial game state upon connection.
 
-Send hit intent/results (plain JS objects) to the server.
+Phase 2: Player Systems (Integrated)
 
-Server performs authoritative raycast validation within its Rapier world using Rapier's JS API, including lag compensation logic written in JavaScript.
+Objective: Implement player representation, physics-driven movement (Rapier) including grapple, and networked synchronization between client and server.
 
-Why: Defines the primary interaction, ensuring hit detection is physics-based via Rapier, controlled and validated using JavaScript.
+2.1 Avatar System (Client Component)
 
-Damage Model (Server JS Logic, Rapier Hitboxes):
+Goal: Provide visual representation within GameViewFPS.jsx.
 
-Implement server-side health/armor state management using JavaScript variables/objects.
+2.1.1 GLB character loader & animation: Load shared GLB (1.3.1), apply potential textures per characterId, setup animation actions/mixer.
 
-Define hitboxes using Rapier Collider shapes created via the JS API, attached to the player's Rapier body.
+2.1.2 First-person camera rig: Load multiple FPV GLBs (1.3.1), manage visibility based on activeWeaponSlot from currentGameState. Render FPV scene as overlay.
 
-Server calculates damage in JavaScript based on validated hits against Rapier hitboxes.
+2.1.3 Third-person spectator camera: Implement logic for optional third-person view.
 
-Broadcast damage/health updates (JS objects). Client displays feedback via DOM manipulation using vanilla JavaScript.
+2.2 Movement Engine (Client Component -> Server Instance via Socket.io, Rapier Physics)
 
-Why: Determines combat outcomes based on physics-defined hit locations, calculated authoritatively on the server using JavaScript logic.
+Goal: Implement physics-driven movement, incorporating grapple gun.
 
-Match Flow (Server JS Logic, Client UI via DOM):
+2.2.1 Input Handler & Rapier Force Application: Client reads keys (WASD, Space, Shift, Ability, Grenade, Reload, Switch, Grapple), predicts movement, sends PLAYER_INPUT_FPS. Server receives, validates (see 6.2.1), applies forces to authoritative Rapier body, considering dash/grapple effects.
 
-Implement server-side round timers/countdowns using JavaScript's setTimeout/setInterval.
+2.2.2 Mouse Look Controller & Camera Sync: Client updates camera, sends lookQuat. Server uses for validation/movement calc. Client uses for grapple aiming.
 
-Track scores using JavaScript variables/objects on the server.
+2.2.3 Collision Detection & Response: Client/Server Rapier handle collisions with map geometry and grenade physics objects.
 
-Define victory/defeat conditions in JavaScript logic.
+2.2.4 Implement Grapple Gun Physics: Client sends target. Server validates target (6.2.3), activates state, applies authoritative physics (impulse or joint) in game loop. Client renders rope visual.
 
-Broadcast match state updates. Client updates HTML HUD elements using vanilla JavaScript DOM manipulation.
+2.3 Networked State (Client Component <-> Server Instance, Rapier State)
 
-Why: Structures the 1v1 duel format using server-side JavaScript logic.
+Goal: Synchronize expanded physics/player state smoothly.
 
-Phase 4: Multiplayer Infrastructure
+2.3.1 Client Prediction/Reconciliation: Client predicts local state changes (incl. ammo, cooldowns). Reconciles based on currentGameState's lastProcessedSequence and authoritative state for all fields (health, shield, ammo, cooldowns, grenades, grapple state, etc.).
 
-Objective: Scale the system to handle multiple concurrent 1v1 matches using JavaScript on the backend.
+2.3.2 Server-side Movement Validation: Server uses authoritative Rapier world and explicit checks (6.2.1) to validate movement, considering ability/grapple effects.
 
-Tasks:
+2.3.3 State Snapshot Interpolation: Client interpolates remote player's visual mesh and potentially grapple rope based on buffered currentGameState updates.
 
-Matchmaking Service (Node.js Logic, potentially Redis):
+Phase 3: Combat Systems (Integrated)
 
-Implement rating system (ELO) logic in JavaScript.
+Objective: Implement weapon management, grenades, abilities, damage model, and match flow incorporating new features.
 
-Create a queue system (e.g., using JavaScript arrays or a Redis client library for Node.js).
+3.1 Weapon System (Client Input -> Server Raycast/Validation)
 
-Match players using JavaScript logic.
+Goal: Implement shooting, weapon switching, and reloading for dual guns.
 
-Assign matched pair to an available game instance.
+3.1.1 Raycast Shooting: Client sends intent. Server uses active weapon state (playerState.activeWeaponSlot, weaponSlots), checks authoritative ammo, performs lag-comp raycast using active weapon's range/damage. Decrements server ammo.
 
-Why: Efficiently pairs players for 1v1 matches using JavaScript server logic.
+3.1.2 Bullet Spread/Recoil: Server applies spread based on active weapon config. Client applies visual recoil based on active weapon config.
 
-Game Instance Isolation (Node.js):
+3.1.3 Hit Registration: Server confirms hits using lag compensation. Checks shooter's damage amp ability status before applying damage. Sends confirmation.
 
-Design the Node.js server (written in JavaScript) to run multiple, independent game instances (e.g., via child_process or worker_threads).
+3.1.4 Implement Weapon Switching: Client sends SWITCH_WEAPON_FPS request. Server validates (6.2.3), updates activeWeaponSlot, loads correct currentAmmoInClip from stored slot ammo, resets spread, broadcasts state. Client plays animations.
 
-Implement management logic in JavaScript.
+3.1.5 Implement Reloading: Client sends RELOAD_WEAPON_FPS request. Server validates (6.2.3), sets isReloading, starts timer based on weapon config, broadcasts state. On timer complete, server refills ammo, clears flag, broadcasts. Client plays animations.
 
-Develop basic crash recovery in JavaScript.
+3.2 Damage Model (Server Instance Authority)
 
-Why: Isolates individual duels using standard Node.js features.
+Goal: Define damage application considering shields and character stats.
 
-State Persistence (Redis, MongoDB with JS Clients):
+3.2.1 Health/Shield Management: State uses shield, initialized via CharacterConfigFPS. Damage applies to shield first. Respawn resets health/shield to character base, resets grenades/ability/ammo (3.6.1).
 
-Use Redis/MongoDB Node.js client libraries to interact with databases from your JavaScript server code.
+3.2.2 Hitbox Config: Server creates Rapier colliders (likely shared config).
 
-Store session data, match history, and player stats.
+3.2.3 Server-Side Damage Calculation: Exclusively on server. Includes shield logic and checks shooter's damage amp status.
 
-Implement leaderboard aggregation logic in JavaScript (server-side or via database queries).
+3.3 Grenade System (NEW)
 
-Why: Maintains persistence using standard database interactions from JavaScript.
+Goal: Implement Frag, Semtex, Flashbang grenades (1 each per round).
 
-Phase 5: Optimization & Scaling
+3.3.1 Client Input & Prediction: Read key, check availability from currentGameState. Send THROW_GRENADE_FPS (type, direction). Predict trajectory visually.
 
-Objective: Enhance performance for many concurrent 1v1 duels, optimizing JavaScript execution where needed.
+3.3.2 Server Handling: Receive msg, validate (availability, state - 6.2.3). Decrement playerState.grenades[type]. Create grenade Rapier body/collider with physics properties. Start fuse timer. Handle Semtex stick logic (collision events).
 
-Tasks:
+3.3.3 Server Grenade Update & Detonation: Include active grenade positions in state sync. On timer/impact, detonate: perform Rapier queries for AoE damage (Frag/Semtex) or Flash check (Flashbang - LoS, angle). Apply effects authoritatively. Broadcast explosion event. Clean up Rapier objects.
 
-Network Optimization: (Same core concepts - Delta compression, Prioritization, Bandwidth throttling) Implement using JavaScript data manipulation and Socket.io configurations.
+3.3.4 Client Visuals & Effects: Render active grenade models based on state sync. Play explosion/flash effects based on broadcast events. Apply screen flash if local player affected.
 
-Spatial Partitioning / Interest Management: Implement algorithms in JavaScript using Rapier's query API.
+3.4 Ability System (NEW)
 
-Horizontal Scaling: (Same infrastructure concepts - Docker, Kubernetes, etc.) The application running inside containers is Node.js executing JavaScript.
+Goal: Implement character-specific abilities with cooldowns.
 
-Phase 6: Security & Anti-Cheat
+3.4.1 Client Input: Read key, check cooldown from currentGameState for feedback. Send USE_ABILITY_FPS. Play activation FX.
 
-Objective: Maintain fair play in the 1v1 competitive environment, validating actions within the JavaScript server logic.
+3.4.2 Server Handling: Receive msg, validate (cooldown, state - 6.2.3). Start cooldown timer (playerState.ability1CooldownRemaining). Apply authoritative effect (Rapier impulse for Dash, state change for Heal, set damageAmpActiveUntil flag for Amp). Broadcast ability use event and state update.
 
-Tasks:
+3.4.3 Client Visuals & Feedback: Play ability FX based on broadcast event. Update HUD cooldown display based on state sync.
 
-Client Hardening: Apply JavaScript obfuscation/minification via build tools.
+3.5 Grapple Gun System Integration (NEW)
 
-Server Validation (Server JS Logic, Rapier):
+Goal: Integrate grapple activation/release into gameplay flow.
 
-Implement strict server-side validation of all player actions within your JavaScript code.
+3.5.1 Client Input & Targeting: Read key. Perform client raycast for target point. Send FIRE_GRAPPLE_FPS (targetPoint). Show hook visual. Send RELEASE_GRAPPLE_FPS on key press.
 
-Movement Plausibility: Use Rapier's JS API on the server to simulate requested moves and check for collisions against the authoritative map geometry. Write JavaScript checks for speed limits, etc.
+3.5.2 Server Validation: Receive FIRE_GRAPPLE_FPS, validate target (range, LoS - 6.2.3). Set playerState.grappleState.active = true, store target. Receive RELEASE_GRAPPLE_FPS, validate (6.2.3), clear active state.
 
-Shot Verification: Use server-side Rapier raycasting via its JS API with lag compensation logic written in JavaScript.
+3.5.3 Client Visuals: Render grapple rope from FPV model to grappleState.targetPoint if active, based on state sync.
 
-Implement rate limiting in JavaScript.
+3.6 Match Flow (Server Instance Control -> Platform Report) (Renumbered from 3.3)
 
-Why: Leverages the server's authoritative Rapier physics (accessed via JS) and custom JavaScript logic as the ground truth. Requires careful validation as JavaScript lacks compile-time type safety.
+Goal: Structure multi-round duels incorporating new mechanics and report outcome.
 
-Monitoring & Reporting: Implement logging and reporting endpoints using JavaScript server code.
+3.6.1 Round Timer/Countdown: Server manages timers. startRound/prepareNextRound resets state including K/D, health/shield (to char base), ammo (full), grenades (1 each), ability cooldowns. Uses spawn points from mapConfig.
 
-Phase 7: Polish & Launch
+3.6.2 Score Tracking: Server tracks K/D per round, roundWins per match. Included in state sync.
 
-Objective: Ship a production-ready 1v1 FPS duel experience using JavaScript.
+3.6.3 Victory/Defeat Conditions: Server checks kills/timer per round. Updates roundWins. Checks if roundWins >= ROUNDS_TO_WIN_MATCH. If yes, trigger endMatch. If no, trigger prepareNextRound and next countdown. endMatch triggers result reporting (4.3).
 
-Tasks:
+Phase 4: Platform Integration (FPS Instance)
 
-Performance Tuning: Profile client-side JavaScript execution and rendering (browser dev tools), server-side Node.js performance, and Rapier simulation steps (both sides). Optimize critical JavaScript code paths.
+Objective: Fully implement FPS instance interactions with the Solana Gaming Platform.
 
-UI & UX Polish: Refine HUD/menus using clean HTML/CSS and efficient vanilla JavaScript DOM manipulation.
+4.1 Solana Escrow Interaction (gameInstance_fps.js)
 
-Progression & Engagement: Implement systems using server-side JavaScript logic and client-side JavaScript for UI updates.
+Goal: Enable instance to release escrow upon match completion.
 
-Launch Preparation: Conduct load testing, test failover, set up monitoring for the Node.js/JavaScript application stack.
+4.1.1 Load Server Authority Keypair
 
-Critical Path Dependencies: (Same fundamental dependencies, implemented in JavaScript)
+4.1.2 Initialize Anchor Client (Server-side)
 
-Network Foundation
+4.1.3 Call release_escrow Instruction
 
-Physics Engine Setup (Client & Server with identical Map Geometry via JS)
+4.1.4 Handle Transaction Confirmation/Errors
 
-Core Rendering Setup
+4.2 Solana Player Profile Interaction (gameInstance_fps.js - Optional On-Chain Stats)
 
-Physics-Driven Movement Engine (reliant on Physics Setup, coded in JS)
+Goal: (Optional) Enable instance to update on-chain player stats.
 
-This plan now reflects the use of plain JavaScript throughout the stack where applicable (client logic, server logic, shared utilities), while still leveraging the specialized libraries (Three.js, Rapier, Socket.io) via their JavaScript APIs. Remember that robust testing and clear code conventions become even more critical without TypeScript's static analysis.
+4.2.1 Call update_stats Instruction
+
+4.2.2 Handle Transaction Confirmation/Errors
+
+4.3 Final Result Reporting (gameInstance_fps.js)
+
+Goal: Reliably report definitive match outcome to the platform.
+
+4.3.1 Gather Final Data: Winner/Loser IDs/Wallets, Scores (K/D), Round Wins, Solana Tx Sigs/Errors. Optionally aggregated stats (grenade hits, etc.).
+
+4.3.2 Send MATCH_RESULT: Use IPC/API to send structured result data back to platform.
+
+4.3.3 Implement Graceful Shutdown: Ensure results reported before process.exit(0).
+
+Phase 5: Optimization (FPS Instance & Client Component)
+
+Objective: Optimize performance specifically within the FPS game module context including new features.
+
+5.1 Network Optimization (Client <-> Instance Socket.io)
+
+Goal: Reduce bandwidth and improve responsiveness.
+
+5.1.1 Delta State Compression: Implement diffing/sending only changed fields for the expanded PlayerStateFPS (incl. shield, ammo, grenades, cooldowns, grapple state, etc.).
+
+5.1.2 Packet Prioritization: Analyze importance of new messages (THROW_GRENADE, USE_ABILITY, FIRE_GRAPPLE, etc. likely high priority C->S). Control frequency if needed.
+
+5.1.3 Bandwidth Throttling: Implement server-side throttling per connection if necessary after other optimizations.
+
+5.2 Spatial Optimization (Server Instance Rapier)
+
+Goal: Optimize server-side physics calculations.
+
+5.2.1 Utilize Rapier Query Pipeline: Apply efficient Rapier queries for grenade AoE/Flash effects and grapple target validation raycasts.
+
+5.2.2 Interest Management: Implicitly handled by 1v1 instance isolation.
+
+5.2.3 LOD Model Switching: Client-side Three.js optimization.
+
+5.3 Instance Resource Optimization (gameInstance_fps.js)
+
+Goal: Minimize CPU/Memory footprint.
+
+5.3.1 Profile Node.js Instance: Profile under load including frequent use of grenades, abilities, grapple gun to identify new bottlenecks.
+
+5.3.2 Optimize Tick Loop: Refine potentially expensive logic: grenade queries, grapple physics application, ability effects, complex state change checks for delta compression.
+
+5.3.3 Manage Memory: Ensure proper cleanup of timers and state associated with grenades (fuse timers, activeGrenades map), abilities (cooldown timers, effect flags), and grapple (grappleState, joints if used).
+
+Phase 6: Security (FPS Instance & Client Component)
+
+Objective: Implement security measures specific to the FPS game module, relying heavily on server instance authority for all actions.
+
+6.1 Client Hardening (Platform Responsibility)
+
+Goal: Benefit passively from platform's build process.
+
+(Verify): Ensure obfuscation, tamper detection (if used), input analysis work correctly with the expanded client logic and new input types.
+
+6.2 Server Validation (Within gameInstance_fps.js)
+
+Goal: Implement rigorous authoritative checks for all player actions.
+
+6.2.1 Movement Plausibility Checks: Validate speed/position changes considering legitimate boosts from Dash ability and Grapple Gun forces.
+
+6.2.2 Shot Verification: Include checks for shooter's Damage Amp status when calculating final damage.
+
+6.2.3 Implement Action Validation (NEW): Add specific server-side validation logic in handlers for: Weapon Switch (slot, state), Reload (ammo, state), Grenade Throw (count, state), Ability Use (cooldown, state), Grapple Fire (range, LoS, state), Grapple Release (state). Reject invalid actions.
+
+6.2.4 Rate Limiting per Action: Apply basic rate limits to new action messages (SWITCH_WEAPON, RELOAD, THROW_GRENADE, USE_ABILITY, FIRE_GRAPPLE, RELEASE_GRAPPLE) to prevent simple spam. (Renumbered from 6.2.3).
+
+6.3 Monitoring & Reporting (Instance -> Platform)
+
+Goal: Log relevant security events for platform analysis.
+
+6.3.1 Log Validation Failures: Log rejections for all validated actions (movement, shot, switch, reload, grenade, ability, grapple) with specific reasons and context in structured format.
+
+6.3.2 Report Tampering Flags: Instance forwards any client tamper reports to platform.
+
+6.3.3 Provide Data for Analysis: Log successful key events including GRENADE_THROWN, GRENADE_DETONATED, ABILITY_USED, GRAPPLE_FIRED, GRAPPLE_RELEASED in structured format for platform analysis.
+
+Phase 7: Polish & Launch Prep (FPS Module)
+
+Objective: Finalize the FPS game module for quality, performance, integration, and balance, incorporating all features.
+
+7.1 Performance Tuning (FPS Specific)
+
+Goal: Achieve target performance including new features.
+
+7.1.1 Client FPS Optimization: Fine-tune rendering load considering different maps, grenade/ability/grapple visual effects. Implement graphics settings affecting these elements.
+
+7.1.2 Server Tick Rate Calibration: Optimize and stabilize server loop under load including grenade physics/queries, ability effects, and grapple physics/validation.
+
+7.1.3 Database Indexing (N/A for instance during match).
+
+7.2 Progression Integration Hooks
+
+Goal: Ensure new FPS actions trigger platform progression systems.
+
+7.2.1 Report Stats Reliably: Ensure MATCH_RESULT includes accurate final K/D and Round Wins. Optionally add aggregated stats for new mechanics if needed for profiles.
+
+7.2.2 Trigger Achievement Events: Log events related to specific grenade uses (kills, sticks), ability uses (kills during amp), grapple usage (distance) with sufficient context for platform achievement system.
+
+7.3 Integration Testing & Refinement
+
+Goal: Verify seamless operation and refine balance considering all features.
+
+7.3.1 Test Full E2E Loop: Execute E2E tests covering Character Selection, Map Variation, and gameplay involving all new mechanics (weapon switching, reloading, grenades, abilities, grapple), verifying correct state changes, Solana interactions, and result reporting.
+
+7.3.2 Test Instance Lifecycle: Verify reliable spawning, registration, shutdown, crash recovery for instances configured with different maps/characters.
+
+7.3.3 Refine Game Balance & Feel: Conduct extensive playtesting focusing on Character/Ability balance, Grenade effectiveness/timing, Grapple utility/exploit potential, Weapon balance across different character health/shields, and Map balance considering all mechanics. Iteratively tune configurations (CHARACTER_CONFIG, ABILITY_CONFIG, GRENADE_CONFIG, grapple parameters, map layouts, etc.).

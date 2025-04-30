@@ -3,151 +3,165 @@ description:
 globs: 
 alwaysApply: true
 ---
-Okay, here's the project progress report reset to the beginning, with all tasks marked as pending [ ] and estimated progress set to 0%.
+Phase 1: Foundational FPS Module Setup (Integration Aware) [Status: Completed] (100%)
 
-Project Progress (JavaScript Version - Reset)
-Phase 1: Foundation Setup [Status: Not Started] (Estimated 0%)
-Objective: Create the skeleton
+Objective: Create the specific skeleton for the FPS game instance server and client component, incorporating foundations for new features.
 
-[ ] Project Infrastructure
-- [ ] Set up monorepo with workspaces (client/server/shared)
-- [ ] Configure module resolution/paths for cross-package imports (using relative paths, bundler aliases, or Node.js resolution)
-- [ ] Create CI/CD pipeline for testing/builds (linting with ESLint, potential bundling)
+[x] 1.1 FPS Game Package & Basic Structure
+Goal: Establish dedicated codebase locations and initial setup.
+[x] 1.1.1 Setup FPS Server Instance Package (packages/game-server-fps)
+[x] 1.1.2 Setup FPS Client Component (apps/web/components/games/fps/)
+[x] 1.1.3 Modify Define FPS-Specific Shared Types (@/shared-types)
 
-[ ] Core Rendering System (Three.js)
-- [ ] Initialize Three.js scene with WebGL renderer
-- [ ] Create viewport management system (resize handling)
-- [ ] Set up basic lighting/shadow system
+[x] 1.2 Core Instance Initialization & Platform Communication
+Goal: Enable the FPS game instance to start, parse arguments, initialize systems, and communicate readiness.
+[x] 1.2.1 Modify Implement Standard Argument Parsing (gameInstance_fps.js)
+[x] 1.2.2 Modify Initialize Core Server Systems (Socket.io, Rapier)
+[x] 1.2.3 Implement Platform Readiness Communication (gameInstance_fps.js)
 
-[ ] Physics Engine Setup (Rapier)
-- [ ] Initialize identical Rapier Worlds (client/server)
-- [ ] Load shared map physics geometry (client/server)
-- [ ] Setup physics simulation loop (world.step())
+[x] 1.3 Core Client Component Setup & Connection
+Goal: Enable the FPS client to initialize for the specific map/characters and connect.
+[x] 1.3.1 Modify Initialize Client Systems (Three.js, Rapier)
+[x] 1.3.2 Modify Establish Game Instance Connection (Socket.io)
+[x] 1.3.3 Modify Basic State Synchronization Placeholder
+Phase 2: Player Systems (Integrated) [Status: Not Started] (0%)
 
-[ ] Network Foundation (Socket.io) (Critical Path)
-- [ ] Establish WebSocket connection protocol (Socket.io)
-- [ ] Create message serialization/deserialization layer (e.g., JSON)
-- [ ] Implement basic heartbeat/ping system
+Objective: Implement player representation, physics-driven movement (Rapier), networked synchronization, and grapple mechanics.
 
-Phase 2: Player Systems [Status: Not Started] (Estimated 0%)
-Objective: Create the core interaction layer
+[x] 2.1 Avatar System (Client Component)
+Goal: Provide visual representation within the GameViewFPS component.
+[x] 2.1.1 Modify GLB character loader & animation
+[x] 2.1.2 Modify First-person camera rig
+[x] 2.1.3 Third-person spectator camera
 
-[ ] Avatar System (Three.js & JS Logic)
-- [ ] GLB character loader with animation mapping (AnimationMixer)
-- [ ] First-person camera rig (arms/weapon view attached to camera)
-- [ ] Third-person spectator camera
+[ ] 2.2 Movement Engine
+Goal: Implement character movement, incorporating abilities and grapple gun.
+[ ] 2.2.1 Modify Input Handler & Rapier Force Application
+[ ] 2.2.2 Modify Mouse Look Controller & Camera Sync
+[ ] 2.2.3 Collision Detection & Response
+[ ] 2.2.4 Implement Grapple Gun Physics
 
-[ ] Movement Engine (Vanilla JS, Rapier) (Critical Path)
-- [ ] WASD keyboard input handler (addEventListener)
-- [ ] Mouse look controller (pitch/yaw, Pointer Lock API)
-- [ ] Collision detection with map geometry (using Rapier physics)
+[ ] 2.3 Networked State
+Goal: Synchronize expanded physics/player state smoothly.
+[ ] 2.3.1 Modify Client Prediction/Reconciliation
+[ ] 2.3.2 Server-side Movement Validation
+[ ] 2.3.3 Modify State Snapshot Interpolation
+Phase 3: Combat Systems (Integrated) [Status: Not Started] (0%)
 
-[ ] Networked State (Socket.io, Rapier, JS Logic)
-- [ ] Client prediction/reconciliation system (client steps local Rapier world, server receives inputs)
-- [ ] Server-side movement validation (server steps authoritative Rapier world)
-- [ ] State snapshot interpolation (Smoothing remote player movement)
+Objective: Implement weapon management, grenades, abilities, damage model, and match flow incorporating new features.
 
-Phase 3: Combat Systems [Status: Not Started] (0%)
-Objective: Build the actual gameplay mechanics (1v1 Focus)
+[ ] 3.1 Weapon System
+Goal: Implement shooting, weapon switching, and reloading.
+[ ] 3.1.1 Modify Raycast Shooting
+[ ] 3.1.2 Modify Bullet Spread/Recoil
+[ ] 3.1.3 Modify Hit Registration
+[ ] 3.1.4 Implement Weapon Switching
+[ ] 3.1.5 Implement Reloading
 
-[ ] Weapon System (Rapier Raycasting, JS Logic)
-- [ ] Rapier-based raycast/shape-cast shooting mechanism
-- [ ] Bullet spread/recoil patterns (affecting ray or physics forces)
-- [ ] Hit registration (client sends intent, server validates via Rapier raycast)
+[ ] 3.2 Damage Model
+Goal: Define damage application considering shields and abilities.
+[ ] 3.2.1 Modify Health/Shield Management
+[ ] 3.2.2 Modify Hitbox Config
+[ ] 3.2.3 Modify Server-Side Damage Calculation
 
-[ ] Damage Model (Server JS Logic, Rapier Hitboxes)
-- [ ] Health/armor management system (server-side JS variables)
-- [ ] Hitbox configuration (using Rapier colliders) per character
-- [ ] Server-side damage calculation (based on validated Rapier hits)
+[ ] 3.3 Grenade System
+Goal: Implement Frag, Semtex, Flashbang grenades.
+[ ] 3.3.1 Client Input & Prediction
+[ ] 3.3.2 Server Handling
+[ ] 3.3.3 Server Grenade Update & Detonation
+[ ] 3.3.4 Client Visuals & Effects
 
-[ ] Match Flow (Server JS Logic, 1v1 Format)
-- [ ] Round timer/countdown system (setTimeout/setInterval)
-- [ ] Score tracking (kills/deaths/rounds)
-- [ ] Victory/defeat conditions (e.g., first to X rounds)
+[ ] 3.4 Ability System
+Goal: Implement character-specific abilities.
+[ ] 3.4.1 Client Input
+[ ] 3.4.2 Server Handling
+[ ] 3.4.3 Client Visuals & Feedback
 
-Phase 4: Multiplayer Infrastructure [Status: Not Started] (0%)
-Objective: Enable mass concurrent 1v1 matches
+[ ] 3.5 Grapple Gun System Integration
+Goal: Integrate grapple activation/release into gameplay flow.
+[ ] 3.5.1 Client Input & Targeting
+[ ] 3.5.2 Server Validation
+[ ] 3.5.3 Client Visuals
 
-[ ] Matchmaking Service (Node.js Logic)
-- [ ] Player rating (ELO) system (JS logic)
-- [ ] Queue management (JS array or Redis via Node client)
-- [ ] Server load balancer integration (Infrastructure level)
+[ ] 3.6 Match Flow
+Goal: Structure multi-round duels and report outcome.
+[ ] 3.6.1 Modify Round Timer/Countdown
+[ ] 3.6.2 Modify Score Tracking
+[ ] 3.6.3 Modify Victory/Defeat Conditions
+Phase 4: Platform Integration (FPS Instance) [Status: Not Started] (0%)
 
-[ ] Game Instance Isolation (Node.js)
-- [ ] Dedicated Node.js process per match (child_process or worker_threads)
-- [ ] Process lifecycle management (JS scripts)
-- [ ] Crash recovery system (JS monitoring logic)
+Objective: Fully implement FPS instance interactions with the Solana Gaming Platform.
 
-[ ] State Persistence (DBs via JS Clients)
-- [ ] Redis session storage (Node Redis client)
-- [ ] MongoDB match history (Node MongoDB client)
-- [ ] Leaderboard aggregation (JS logic or DB query)
+[ ] 4.1 Solana Escrow Interaction
+[ ] 4.1.1 Load Server Authority Keypair
+[ ] 4.1.2 Initialize Anchor Client
+[ ] 4.1.3 Call release_escrow Instruction
+[ ] 4.1.4 Handle Transaction Confirmation/Errors
 
-Phase 5: Optimization & Scaling [Status: Not Started] (0%)
-Objective: Achieve target concurrent matches
+[ ] 4.2 Solana Player Profile Interaction (Optional)
+[ ] 4.2.1 Call update_stats Instruction
+[ ] 4.2.2 Handle Transaction Confirmation/Errors
 
-[ ] Network Optimization
-- [ ] Delta state compression (JS object comparison)
-- [ ] Packet prioritization (Socket.io logic)
-- [ ] Bandwidth throttling (Server-side controls)
+[ ] 4.3 Final Result Reporting
+[ ] 4.3.1 Modify Gather Final Data
+[ ] 4.3.2 Send MATCH_RESULT
+[ ] 4.3.3 Implement Graceful Shutdown
+Phase 5: Optimization (FPS Instance & Client Component) [Status: Not Started] (0%)
 
-[ ] Spatial Partitioning / Interest Management (Rapier Queries)
-- [ ] Map segmentation logic (if needed for large maps)
-- [ ] Interest management system (server sends relevant updates only)
-- [ ] LOD model switching (Three.js)
+Objective: Optimize performance specifically within the FPS game module context including new features.
 
-[ ] Horizontal Scaling (Infrastructure)
-- [ ] Containerization (Docker for Node.js app)
-- [ ] Kubernetes cluster configuration
-- [ ] Auto-scaling triggers (CPU/connections/memory)
-- [ ] Global server region deployment
+[ ] 5.1 Network Optimization
+[ ] 5.1.1 Modify Delta State Compression
+[ ] 5.1.2 Modify Packet Prioritization
+[ ] 5.1.3 Bandwidth Throttling
 
-Phase 6: Security & Anti-Cheat [Status: Not Started] (0%)
-Objective: Maintain fair competitive environment
+[ ] 5.2 Spatial Optimization
+[ ] 5.2.1 Modify Utilize Rapier Query Pipeline
+[ ] 5.2.2 Interest Management
+[ ] 5.2.3 LOD Model Switching
 
-[ ] Client Hardening
-- [ ] JavaScript code obfuscation/minification (Build step)
-- [ ] (Advanced) Memory tamper detection research
-- [ ] Input pattern analysis research
+[ ] 5.3 Instance Resource Optimization
+[ ] 5.3.1 Modify Profile Node.js Instance
+[ ] 5.3.2 Modify Optimize Tick Loop
+[ ] 5.3.3 Modify Manage Memory
+Phase 6: Security (FPS Instance & Client Component) [Status: Not Started] (0%)
 
-[ ] Server Validation (Authoritative Rapier & JS Logic)
-- [ ] Movement plausibility checks (validating against server Rapier simulation)
-- [ ] Shot verification rewinding (using server Rapier raycasts & history)
-- [ ] Rate limiting per action (JS logic)
+Objective: Implement security measures specific to the FPS game module.
 
-[ ] Monitoring
-- [ ] Cheat pattern detection analysis (Logging and manual/AI review)
-- [ ] Player report system (Simple endpoint and UI)
-- [ ] Match replay data storage (Saving inputs/state snapshots)
+[ ] 6.1 Client Hardening
+[ ] 6.1.1 Verify Code Obfuscation
+[ ] 6.1.2 Verify Memory Tamper Detection
+[ ] 6.1.3 Verify Input Pattern Analysis
 
-Phase 7: Polish & Launch [Status: Not Started] (0%)
-Objective: Ship production-ready 1v1 experience
+[ ] 6.2 Server Validation
+[ ] 6.2.1 Modify Movement Plausibility Checks
+[ ] 6.2.2 Modify Shot Verification
+[ ] 6.2.3 Implement Action Validation
+[ ] 6.2.4 Modify Rate Limiting per Action
 
-[ ] Performance Tuning
-- [ ] Client FPS optimization (JS, Three.js, Rapier tuning)
-- [ ] Server tick rate calibration (Node.js / Rapier performance)
-- [ ] Database indexing/query optimization
+[ ] 6.3 Monitoring & Reporting
+[ ] 6.3.1 Modify Log Validation Failures
+[ ] 6.3.2 Report Tampering Flags
+[ ] 6.3.3 Modify Provide Data for Analysis
+Phase 7: Polish & Launch Prep (FPS Module) [Status: Not Started] (0%)
 
-[ ] UI/UX Polish (Vanilla JS/HTML/CSS)
-- [ ] HUD refinement
-- [ ] Menu system implementation
-- [ ] Sound effects / Visual feedback
+Objective: Finalize the FPS game module for quality, performance, integration, and balance.
 
-[ ] Progression Systems (JS Logic & DB)
-- [ ] Player profiles / Stats display
-- [ ] Cosmetic unlock system (if applicable)
-- [ ] Achievement tracking
+[ ] 7.1 Performance Tuning
+[ ] 7.1.1 Modify Client FPS Optimization
+[ ] 7.1.2 Modify Server Tick Rate Calibration
+[ ] 7.1.3 Database Indexing
 
-[ ] Launch Prep
-- [ ] Load testing (Simulating target concurrent 1v1 matches)
-- [ ] Failover systems testing
-- [ ] Monitoring dashboards setup
+[ ] 7.2 Progression Integration Hooks
+[ ] 7.2.1 Modify Report Stats Reliably
+[ ] 7.2.2 Modify Trigger Achievement Events
 
-Legend:
+[ ] 7.3 Integration Testing & Refinement
+[ ] 7.3.1 Modify Test Full E2E Loop
+[ ] 7.3.2 Test Instance Lifecycle
+[ ] 7.3.3 Modify Refine Game Balance & Feel
 
-[ ]: Pending
-
-[/]: In Progress
-
-[x]: Completed
-[-]: Blocked
+[ ] 7.4 Connection Robustness & Handshake Refinement (NEW)
+[ ] 7.4.1 Refactor Client Connection with useRef & Retries
+[ ] 7.4.2 Enhance Client Connection Status Feedback
+[ ] 7.4.3 Refine Server Disconnect Handling & Logging

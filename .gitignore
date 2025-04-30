@@ -1,0 +1,11 @@
+node_modules
+.next
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+models
+.next
+# Ignore large 3D model assets for FPS game
+apps/web/public/assets/fps_1v1/models/**/*.glb

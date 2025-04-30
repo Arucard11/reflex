@@ -1,0 +1,11 @@
+{
+  "name": "@shared-types/game-fps",
+  "version": "1.0.0",
+  "private": true,
+  "main": "src/game-fps.js",
+  "type": "module",
+  "exports": {
+    "import": "./src/game-fps.js",
+    "require": "./src/game-fps.js"
+  }
+} 
