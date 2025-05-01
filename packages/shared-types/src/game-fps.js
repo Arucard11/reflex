@@ -1,5 +1,10 @@
 // packages/shared-types/src/game-fps.js
 
+// --- Import Extracted Map Physics Data ---
+import { map1Vertices, map1Indices } from './map1_physics_data.js';
+import { map2Vertices, map2Indices } from './map2_physics_data.js';
+// Map 3 data extraction failed, keep using primitives for now.
+
 // --- Core Enums / Constants ---
 export const GrenadeType = {
     FRAG: 'frag',
@@ -25,6 +30,37 @@ export const MapId = {
     MAP_2: 'map2',
     MAP_3: 'map3',
 };
+
+// --- NEW: Physics Collision Groups ---
+/**
+ * Defines bitmasks for different collision categories.
+ * Each object belongs to one group (memberships) and defines which groups it can interact with (filter).
+ */
+export const CollisionGroup = {
+    // Membership groups (powers of 2)
+    WORLD: 1 << 0,        // Static map geometry
+    PLAYER_BODY: 1 << 1,  // Player physics capsule
+    PLAYER_HITBOX: 1 << 2,// Separate hitboxes for damage
+    GRENADE: 1 << 3,      // Thrown grenades
+    PROJECTILE: 1 << 4,   // Bullets, if modeled as objects (currently raycast)
+    // ... add more as needed (e.g., vehicles, interactables)
+
+    // Interaction Masks (combinations)
+    ALL: 0xFFFFFFFF, // Collides with everything
+    NONE: 0x00000000, // Collides with nothing
+};
+
+/**
+ * Rapier helper function to generate interaction groups bitmask.
+ * @param {number} memberships - Which group(s) this object belongs to (use CollisionGroup constants).
+ * @param {Array<number>} filter - Which group(s) this object can collide with (array of CollisionGroup constants).
+ * @returns {number} The combined bitmask for collider.setCollisionGroups().
+ */
+export function interactionGroups(memberships, filter) {
+    const filterMask = filter.reduce((acc, group) => acc | group, 0);
+    return (memberships << 16) | filterMask;
+}
+// --- End Physics Collision Groups ---
 
 // --- Configuration Structures ---
 
@@ -114,25 +150,44 @@ export const MAP_CONFIGS_FPS = {
     [MapId.MAP_1]: {
         id: MapId.MAP_1, name: 'Map 1', visualAssetPath: '/assets/fps_1v1/models/map1.glb',
         physicsData: {
-            colliders: [
-                { type: 'cuboid', position: { x: 0, y: -0.1, z: 0 }, dimensions: { x: 100, y: 0.2, z: 100 } }, // Ground
-                { type: 'cuboid', position: { x: 0, y: 2, z: 15 }, dimensions: { x: 20, y: 4, z: 0.5 } }, // Wall 1
-                // ... more walls, boxes, etc.
-            ],
-            spawnPoints: [{ x: -10, y: 1, z: 0 }, { x: 10, y: 1, z: 0 }]
+            // Use extracted trimesh data
+            vertices: map1Vertices,
+            indices: map1Indices,
+            // Keep spawn points
+            spawnPoints: [{ x: -5, y: 1, z: 6 }, { x: 5, y: 1, z: 3 }],
+            // Remove primitive colliders if using trimesh
+            // colliders: [
+            //     { type: 'cuboid', position: { x: 0, y: -0.1, z: 0 }, dimensions: { x: 100, y: 0.2, z: 100 } }, // Ground
+            //     { type: 'cuboid', position: { x: 0, y: 2, z: 15 }, dimensions: { x: 20, y: 4, z: 0.5 } }, // Wall 1
+            //     // ... more walls, boxes, etc.
+            // ],
         }
     },
     [MapId.MAP_2]: {
         id: MapId.MAP_2, name: 'Map 2', visualAssetPath: '/assets/fps_1v1/models/map2.glb',
-        physicsData: { /* ... different colliders and spawn points ... */ spawnPoints: [{ x: 0, y: 1, z: -15 }, { x: 0, y: 1, z: 15 }] }
+        physicsData: {
+            // Use extracted trimesh data
+            vertices: map2Vertices,
+            indices: map2Indices,
+             // Keep spawn points
+            spawnPoints: [{ x: 0, y: 1, z: -10 }, { x: 0, y: 1, z: 10 }],
+            // Remove primitive colliders if using trimesh
+            // colliders: [
+            //     { type: 'cuboid', position: { x: 0, y: -0.1, z: 0 }, dimensions: { x: 100, y: 0.2, z: 100 } }, // Ground
+            //     { type: 'cuboid', position: { x: 0, y: 2, z: 15 }, dimensions: { x: 20, y: 4, z: 0.5 } }, // Wall 1
+            //     // ... more walls, boxes, etc.
+            // ],
+        }
     },
     [MapId.MAP_3]: {
         id: MapId.MAP_3, name: 'Map 3', visualAssetPath: '/assets/fps_1v1/models/map3.glb',
+        // Map 3 extraction failed - Keep using primitive colliders as fallback
         physicsData: {
             colliders: [
                 { type: 'cuboid', position: { x: 0, y: -0.1, z: 0 }, dimensions: { x: 100, y: 0.2, z: 100 } }, // Ground
+                // TODO: Add more representative colliders for map 3 if needed
             ],
-            spawnPoints: [{ x: -20, y: 1, z: 0 }, { x: 20, y: 1, z: 0 }]
+            spawnPoints: [{ x: -15, y: 1, z: 0 }, { x: 15, y: 1, z: 0 }]
         }
     },
 };

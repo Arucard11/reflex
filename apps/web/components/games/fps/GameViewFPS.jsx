@@ -7,7 +7,17 @@ import { io, Socket } from 'socket.io-client'; // Import socket.io client and sp
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 // Assuming shared types and map data are correctly resolved by build/monorepo setup
-import { MessageTypeFPS, MapId, CharacterId, MAP_CONFIGS_FPS, CHARACTER_CONFIG_FPS, WEAPON_CONFIG_FPS } from '@shared-types/game-fps';
+import {
+    MessageTypeFPS,
+    MapId,
+    CharacterId,
+    MAP_CONFIGS_FPS,
+    CHARACTER_CONFIG_FPS,
+    WEAPON_CONFIG_FPS,
+    // NEW: Import CollisionGroup AND interactionGroups function
+    CollisionGroup,
+    interactionGroups
+} from '@shared-types/game-fps';
 
 // Define props based on Universal Standard (II.1)
 function GameViewFPS({
@@ -37,7 +47,7 @@ function GameViewFPS({
     const [connectionStatus, setConnectionStatus] = useState('disconnected'); // 'connecting', 'connected', 'error', 'retrying', 'disconnected'
     const [retryAttempt, setRetryAttempt] = useState(0); // Track retry attempts
     // NEW: State for camera view mode (Plan 2.1.3)
-    const [isThirdPersonView, setIsThirdPersonView] = useState(false); // Default to First Person
+    const [isThirdPersonView, setIsThirdPersonView] = useState(true); // DEBUG: Force 3rd person
     // NEW: Add state to hold the merged game state received from server (Plan 1.1.2)
     const [currentGameState, setCurrentGameState] = useState(null);
 
@@ -53,6 +63,76 @@ function GameViewFPS({
     });
     const lastInputSendTimeRef = useRef(0);
     const INPUT_SEND_INTERVAL = 1000 / 30; // Send input ~30 times/sec
+
+    // >>> NEW: Function to apply physics based on input <<< (Used by prediction & reconciliation)
+    const applyInputPhysics = useCallback((playerBody, inputKeys, inputLookQuat, physicsDeltaTime) => {
+        if (!playerBody || physicsDeltaTime <= 0) return;
+
+        // Constants should ideally match server
+        const walkSpeed = 5.0;
+        const runSpeed = 8.0;
+        const jumpImpulse = 7.0;
+        const accelerationForce = 2000.0; // Force applied per second
+        const maxAccelForce = 50.0; // Max force per tick (scaled by deltaTime)
+        const airControlFactor = 0.2;
+
+        let desiredVelocity = new THREE.Vector3(0, 0, 0);
+        let moveDirection = new THREE.Vector3(0, 0, 0);
+        let isMoving = false;
+
+        // Use the provided lookQuat for direction calculation
+        const _lookQuat = new THREE.Quaternion(inputLookQuat.x, inputLookQuat.y, inputLookQuat.z, inputLookQuat.w);
+        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(_lookQuat);
+        const right = new THREE.Vector3(1, 0, 0).applyQuaternion(_lookQuat);
+        forward.y = 0; // Project onto ground plane
+        right.y = 0;
+        forward.normalize();
+        right.normalize();
+
+        if (inputKeys.W) { moveDirection.add(forward); isMoving = true; }
+        if (inputKeys.S) { moveDirection.sub(forward); isMoving = true; }
+        if (inputKeys.A) { moveDirection.sub(right); isMoving = true; }
+        if (inputKeys.D) { moveDirection.add(right); isMoving = true; }
+
+        if (isMoving) {
+            moveDirection.normalize();
+            const targetSpeed = inputKeys.Shift ? runSpeed : walkSpeed;
+            desiredVelocity.x = moveDirection.x * targetSpeed;
+            desiredVelocity.z = moveDirection.z * targetSpeed;
+        }
+
+        // Apply force based on velocity difference
+        const currentLinvel = playerBody.linvel();
+        let force = new THREE.Vector3(0, 0, 0);
+        const velocityDiffX = desiredVelocity.x - currentLinvel.x;
+        const velocityDiffZ = desiredVelocity.z - currentLinvel.z;
+
+        force.x = velocityDiffX * accelerationForce * physicsDeltaTime;
+        force.z = velocityDiffZ * accelerationForce * physicsDeltaTime;
+
+        // TODO: Air control factor application needs ground check state
+        // const isOnGround = true; // Placeholder - get from Rapier contacts or server state
+        // if (!isOnGround) {
+        //     force.x *= airControlFactor;
+        //     force.z *= airControlFactor;
+        // }
+
+        // Clamp force
+        const forceMagnitude = force.length(); // Use THREE.Vector3 length
+        if (forceMagnitude > maxAccelForce) {
+            force.multiplyScalar(maxAccelForce / forceMagnitude);
+        }
+        playerBody.applyImpulse({ x: force.x, y: 0, z: force.z }, true);
+
+        // Jumping
+        // TODO: Needs reliable client-side ground check
+        const isOnGround = true; // Placeholder
+        if (inputKeys.Space && isOnGround /* && !wasJumpingLastFrame */) {
+            playerBody.applyImpulse({ x: 0, y: jumpImpulse, z: 0 }, true);
+            // TODO: Prevent spamming jump impulse
+        }
+
+    }, []); // Empty dependency array as it uses constants and args
 
     // Effect for initialization and cleanup
     useEffect(() => {
@@ -74,6 +154,9 @@ function GameViewFPS({
         let renderer, scene, camera, rapierWorld, renderLoopId;
         let localPlayer = { mesh: null, rapierBody: null, mixer: null };
         let remotePlayer = { mesh: null, mixer: null };
+        let physicsDebugRenderer = null; // <<< NEW: Ref for debug renderer
+        // >>> NEW: Declare lines in the outer scope <<< 
+        let lines = null;
         // MODIFIED: Updated fpvElements structure
         let fpvElements = {
             camera: null,
@@ -84,6 +167,12 @@ function GameViewFPS({
 
         // >>> NEW: Move Input Handlers outside initGame <<< Plan 2.2.1 / 2.2.2
         const handleKeyDown = (event) => {
+            console.log(`[DEBUG] KeyDown: code=${event.code}, key=${event.key}`);
+            // Prevent browser default actions for game keys
+            if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'ShiftLeft', 'KeyC'].includes(event.code)) {
+                event.preventDefault();
+            }
+
             // Map event.code to inputState keys (more robust than event.key)
             switch (event.code) {
                 case 'KeyW': inputStateRef.current.keys.W = true; break;
@@ -98,6 +187,12 @@ function GameViewFPS({
             }
         };
         const handleKeyUp = (event) => {
+            console.log(`[DEBUG] KeyUp: code=${event.code}, key=${event.key}`);
+            // Prevent browser default actions for game keys
+            if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'ShiftLeft', 'KeyC'].includes(event.code)) {
+                event.preventDefault();
+            }
+
             switch (event.code) {
                 case 'KeyW': inputStateRef.current.keys.W = false; break;
                 case 'KeyA': inputStateRef.current.keys.A = false; break;
@@ -107,9 +202,12 @@ function GameViewFPS({
                 case 'ShiftLeft': inputStateRef.current.keys.Shift = false; break;
                 // NEW: Toggle Camera Key Release
                 case 'KeyC':
-                    if (inputStateRef.current.keys.C) { // Process toggle on key up
-                         setIsThirdPersonView(prev => !prev);
-                         console.log('Toggled view. isThirdPerson:', !isThirdPersonView);
+                    if (inputStateRef.current.keys.C) {
+                        setIsThirdPersonView(prev => {
+                            const newVal = !prev;
+                            console.log(`[DEBUG] Camera mode toggled. isThirdPersonView now: ${newVal}`);
+                            return newVal;
+                        });
                     }
                     inputStateRef.current.keys.C = false; break;
                 // Add other keys later
@@ -117,6 +215,11 @@ function GameViewFPS({
         };
 
         const handleMouseMove = (event) => {
+            // NEW: Log entry into the handler
+            console.log('handleMouseMove fired.');
+            // NEW: Log pointer lock status
+            console.log('Pointer Lock Element:', document.pointerLockElement);
+
             // Need camera defined before use - ensure initGame runs first or check existence
             if (!document.pointerLockElement || !camera) return;
 
@@ -139,10 +242,11 @@ function GameViewFPS({
         };
 
         const handlePointerLockChange = () => {
+            // NEW: Log pointer lock changes
             if (document.pointerLockElement === canvasElement) {
-                console.log('Pointer Locked');
+                console.log('Pointer Locked (handlePointerLockChange)');
             } else {
-                console.log('Pointer Unlocked');
+                console.log('Pointer Unlocked (handlePointerLockChange)');
             }
         };
         // >>> End Moved Input Handlers <<<
@@ -277,6 +381,11 @@ function GameViewFPS({
                 remotePlayer.mixer = new THREE.AnimationMixer(remotePlayer.mesh);
                 console.log("Character models loaded and mixers created.");
 
+                // ... after loading localPlayer.mesh and remotePlayer.mesh, before adding to scene ...
+                localPlayer.mesh.scale.set(0.3, 0.3, 0.3); // DEBUG: Reduce character size
+                remotePlayer.mesh.scale.set(0.3, 0.3, 0.3); // DEBUG: Reduce character size
+                console.log('[DEBUG] Character model scale set to (0.3, 0.3, 0.3)');
+
                 // --- Load FPV Arms/Weapons (NEW - logic from 2.1.2 adapted) ---
                 console.log("Loading FPV assets...");
                 fpvElements.weaponModels = {}; // Reset before loading
@@ -351,25 +460,97 @@ function GameViewFPS({
                 rapierWorld = new RAPIER.World({ x: 0.0, y: -9.81, z: 0.0 });
                 console.log('Client Rapier World created.'); // Log progress
 
-                // --- Load Map Physics ---
+                // >>> NEW: Move debug lines creation here, assign to outer scope variable <<<
+                lines = new THREE.LineSegments(
+                    new THREE.BufferGeometry(),
+                    new THREE.LineBasicMaterial({ color: 0xffffff, vertexColors: true })
+                );
+                scene.add(lines);
+
+                // --- Load Map Physics (Client - Mirroring server 1.2.2) ---
                 console.log(`Loading Client Physics for Map ID: ${mapId}...`);
-                const clientPhysicsData = mapConfig.physicsData;
-                if (clientPhysicsData.colliders) {
-                    clientPhysicsData.colliders.forEach(colliderData => {
-                        let colliderDesc;
-                        if (colliderData.type === 'cuboid') {
-                            colliderDesc = RAPIER.ColliderDesc.cuboid(colliderData.dimensions.x / 2, colliderData.dimensions.y / 2, colliderData.dimensions.z / 2);
-                        } // Add other types if needed
-                        if (colliderDesc) {
-                            colliderDesc.setTranslation(colliderData.position.x, colliderData.position.y, colliderData.position.z);
-                            // Set groups, friction, etc. - ENSURE THESE MATCH SERVER
-                            // colliderDesc.setCollisionGroups(...)
-                            rapierWorld.createCollider(colliderDesc);
+                const clientMapConfig = MAP_CONFIGS_FPS[mapId]; // Use a different variable name
+                if (!clientMapConfig || !clientMapConfig.physicsData) {
+                    console.warn(`Client: No physicsData found for map ${mapId}.`);
+                } else {
+                    const clientPhysicsData = clientMapConfig.physicsData;
+                    console.log("Client: Found Physics Data:", JSON.stringify(clientPhysicsData, null, 2)); // Log physics data
+
+                    // --- Prioritize Trimesh Loading --- (NEW)
+                    if (clientPhysicsData.vertices && clientPhysicsData.vertices.length > 0 && clientPhysicsData.indices && clientPhysicsData.indices.length > 0) {
+                        console.log(`[Client Physics Load] Attempting to load TR MESH...`);
+                        try {
+                            const rigidBodyDesc = RAPIER.RigidBodyDesc.fixed();
+                            const body = rapierWorld.createRigidBody(rigidBodyDesc);
+                            const trimeshDesc = RAPIER.ColliderDesc.trimesh(clientPhysicsData.vertices, clientPhysicsData.indices);
+                            console.log(`[Client Physics Load] TrimeshDesc created.`);
+
+                            // IMPORTANT: Set Collision Groups - MUST MATCH SERVER
+                            const groups = interactionGroups(
+                                CollisionGroup.WORLD,
+                                [CollisionGroup.PLAYER_BODY, CollisionGroup.GRENADE, CollisionGroup.PROJECTILE]
+                            );
+                            trimeshDesc.setCollisionGroups(groups);
+                            console.log(`[Client Physics Load] Trimesh Set collision groups to:`, groups);
+
+                            const collider = rapierWorld.createCollider(trimeshDesc, body);
+                            console.log(`[Client Physics Load] SUCCESS: Created client trimesh map collider handle: ${collider.handle}`);
+                        } catch (error) {
+                            console.error(`[Client Physics Load] ERROR: Failed to create client trimesh collider for map ${mapId}:`, error);
+                            console.warn(`[Client Physics Load] Falling back to primitive colliders if available...`);
+                            loadClientPrimitiveColliders(clientPhysicsData, mapId); // Call helper as fallback
                         }
-                    });
-                    console.log(`Created ${clientPhysicsData.colliders.length} client map colliders.`);
-                } // Add trimesh loading if used
-                console.log('Client Map Physics Loaded.'); // Log progress
+                    } else {
+                         console.log(`[Client Physics Load] No valid trimesh data found. Checking for primitive colliders...`);
+                         loadClientPrimitiveColliders(clientPhysicsData, mapId); // Call helper if no trimesh
+                    }
+                }
+                console.log('Client Map Physics Loading Attempt Complete.'); // Log progress
+
+                // Helper function for loading client primitive colliders (NEW)
+                function loadClientPrimitiveColliders(physicsData, mapId) {
+                     if (physicsData.colliders && physicsData.colliders.length > 0) {
+                        console.log(`[Client Physics Load - Primitives] Processing ${physicsData.colliders.length} primitive colliders...`);
+                        physicsData.colliders.forEach((colliderData, index) => {
+                            console.log(`[Client Collider ${index}] Data:`, JSON.stringify(colliderData));
+                            let colliderDesc;
+                            let rigidBodyDesc = RAPIER.RigidBodyDesc.fixed();
+
+                            if (colliderData.position) {
+                                rigidBodyDesc.setTranslation(colliderData.position.x, colliderData.position.y, colliderData.position.z);
+                            }
+                            // TODO: Set rotation if provided
+
+                            if (colliderData.type === 'cuboid') {
+                                if (!colliderData.dimensions) { console.warn(`[Client Collider ${index}] Cuboid missing dimensions`); return; }
+                                colliderDesc = RAPIER.ColliderDesc.cuboid(colliderData.dimensions.x / 2, colliderData.dimensions.y / 2, colliderData.dimensions.z / 2);
+                            } // Add other types if needed
+                            else {
+                                console.warn(`[Client Collider ${index}] Unsupported collider type: ${colliderData.type}`);
+                                return;
+                            }
+
+                            if (colliderDesc) {
+                                console.log(`[Client Collider ${index}] ColliderDesc created.`);
+                                // IMPORTANT: Ensure client sets collision groups identically to server!
+                                const groups = interactionGroups(
+                                    CollisionGroup.WORLD,
+                                    [CollisionGroup.PLAYER_BODY, CollisionGroup.GRENADE, CollisionGroup.PROJECTILE]
+                                );
+                                colliderDesc.setCollisionGroups(groups); // <<< ADDED MISSING CALL
+                                console.log(`[Client Collider ${index}] Set collision groups to:`, groups);
+
+                                const body = rapierWorld.createRigidBody(rigidBodyDesc);
+                                const collider = rapierWorld.createCollider(colliderDesc, body);
+                                console.log(`[Client Collider ${index}] Created map collider handle: ${collider.handle} attached to body handle: ${body.handle}`);
+                            } else {
+                                console.warn(`[Client Collider ${index}] Failed to create ColliderDesc.`);
+                            }
+                        });
+                    } else {
+                        console.log("Client: No primitive colliders defined in physicsData.");
+                    }
+                 }
 
                 // --- Resize Handling ---
                 const handleResize = () => {
@@ -394,22 +575,32 @@ function GameViewFPS({
                 if (canvasElement) { // Ensure canvasElement exists
                     // Attach pointer lock error handler once
                     document.addEventListener('pointerlockerror', (event) => {
-                        console.error('Pointer lock failed', event);
+                        // >>> ADDED LOG <<<
+                        console.error('[PointerLock] Error acquiring pointer lock:', event);
                     }, { once: true });
 
                     const pointerLockClickListener = () => {
+                         // >>> ADDED LOG <<<
+                        console.log('[PointerLock] Canvas clicked.');
                         if (!document.pointerLockElement) {
+                             // >>> ADDED LOG <<<
+                            console.log('[PointerLock] Attempting to request pointer lock...');
                             if (typeof canvasElement.requestPointerLock === 'function') {
                                 canvasElement.requestPointerLock(); // No .catch(), synchronous in most browsers
+                                // >>> ADDED LOG <<<
+                                console.log('[PointerLock] requestPointerLock() called.');
                             } else {
-                                console.error('Error: canvasElement.requestPointerLock is not a function!');
+                                console.error('[PointerLock] Error: canvasElement.requestPointerLock is not a function!');
                             }
+                        } else {
+                            // >>> ADDED LOG <<<
+                            console.log('[PointerLock] Pointer already locked.');
                         }
                     };
                     canvasElement.addEventListener('click', pointerLockClickListener, { signal: abortController.signal });
-                    console.log("Pointer Lock click listener attached (early for FPS input).");
+                    console.log("[PointerLock] Click listener attached.");
                 } else {
-                    console.error("Canvas element not found at pointer lock setup!");
+                    console.error("[PointerLock] Canvas element not found at pointer lock setup!");
                 }
 
                 // --- Render Loop ---
@@ -435,86 +626,40 @@ function GameViewFPS({
                     const now = performance.now();
                     if (socketRef.current?.connected && now - lastInputSendTimeRef.current > INPUT_SEND_INTERVAL) {
                         inputStateRef.current.sequence++; // Increment sequence number
+                        // Ensure all relevant keys are included in the payload
                         const payload = {
                             sequence: inputStateRef.current.sequence,
                             deltaTime: deltaTime, // Include frame delta time
-                            keys: { ...inputStateRef.current.keys },
+                            keys: { ...inputStateRef.current.keys }, // Send current key state
                             lookQuat: { ...inputStateRef.current.lookQuat }
                         };
                         socketRef.current.emit(MessageTypeFPS.PLAYER_INPUT_FPS, payload);
                         lastInputSendTimeRef.current = now;
-                        // TODO: Store pendingInputs (Phase 2.3.1)
+                        // Store this input locally for reconciliation (Plan 2.3.1)
+                        inputStateRef.current.pendingInputs.push(payload);
+                        // Limit buffer size if needed
+                        if (inputStateRef.current.pendingInputs.length > 60) { // Keep ~1-2 seconds of inputs
+                             inputStateRef.current.pendingInputs.shift();
+                        }
                     }
                     // >>> End Send Input State <<<
 
                     // --- Physics Simulation --- (NEW - Step 2.2.1 Client Prediction)
                     // 1. Apply Local Input Prediction (Before stepping world)
                     if (localPlayer.rapierBody && localState && localState.state === 'alive') {
-                        const playerBody = localPlayer.rapierBody;
-                        const currentKeys = inputStateRef.current.keys;
-                        const currentLookQuat = camera.quaternion; // Use current camera view
-
-                        // Mirror server-side force calculation constants
-                        const walkSpeed = 5.0;
-                        const runSpeed = 8.0;
-                        const jumpImpulse = 7.0;
-                        const accelerationForce = 2000.0; // Should match server
-                        const maxAccelForce = 50.0; // Should match server
-
-                        let desiredVelocity = new THREE.Vector3(0, 0, 0);
-                        let moveDirection = new THREE.Vector3(0, 0, 0);
-                        let isMoving = false;
-
-                        // Calculate forward/right vectors based on camera quaternion
-                        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(currentLookQuat); //.normalize(); // Normalization might happen below
-                        const right = new THREE.Vector3(1, 0, 0).applyQuaternion(currentLookQuat); //.normalize();
-                        forward.y = 0; // Project onto ground plane
-                        right.y = 0;
-                        forward.normalize();
-                        right.normalize();
-
-                        if (currentKeys.W) { moveDirection.add(forward); isMoving = true; }
-                        if (currentKeys.S) { moveDirection.sub(forward); isMoving = true; }
-                        if (currentKeys.A) { moveDirection.sub(right); isMoving = true; }
-                        if (currentKeys.D) { moveDirection.add(right); isMoving = true; }
-
-                        if (isMoving) {
-                            moveDirection.normalize();
-                            const targetSpeed = currentKeys.Shift ? runSpeed : walkSpeed;
-                            desiredVelocity.x = moveDirection.x * targetSpeed;
-                            desiredVelocity.z = moveDirection.z * targetSpeed;
-                        }
-
-                        // Apply force based on velocity difference
-                        const currentLinvel = playerBody.linvel(); // Get current velocity from Rapier body
-                        let force = new THREE.Vector3(0, 0, 0);
-                        const velocityDiffX = desiredVelocity.x - currentLinvel.x;
-                        const velocityDiffZ = desiredVelocity.z - currentLinvel.z;
-
-                        force.x = velocityDiffX * accelerationForce * deltaTime;
-                        force.z = velocityDiffZ * accelerationForce * deltaTime;
-
-                        // Clamp force
-                        const forceMagnitude = Math.sqrt(force.x * force.x + force.z * force.z);
-                        if (forceMagnitude > maxAccelForce) {
-                            const scale = maxAccelForce / forceMagnitude;
-                            force.x *= scale;
-                            force.z *= scale;
-                        }
-                        playerBody.applyImpulse({ x: force.x, y: 0, z: force.z }, true);
-
-                        // Jumping Prediction
-                        // TODO: Client-side ground check needed here too for accurate prediction
-                        const isOnGround = true; // Placeholder
-                        if (currentKeys.Space && isOnGround /* && !wasJumpingLastFrame */) {
-                            playerBody.applyImpulse({ x: 0, y: jumpImpulse, z: 0 }, true);
-                            // TODO: Add jump input flag/timer to prevent spamming impulse
-                        }
+                        // >>> ADDED LOG <<<
+                        console.log(`[Predict] Applying input: W=${inputStateRef.current.keys.W} | Body Vel: ${localPlayer.rapierBody.linvel().x.toFixed(2)},${localPlayer.rapierBody.linvel().y.toFixed(2)},${localPlayer.rapierBody.linvel().z.toFixed(2)}`);
+                        // Apply physics using the helper function
+                        applyInputPhysics(localPlayer.rapierBody, inputStateRef.current.keys, inputStateRef.current.lookQuat, deltaTime);
                     }
 
                     // 2. Step Client Physics World
                     if (rapierWorld) {
                         rapierWorld.step();
+                        // >>> ADDED LOG <<<
+                        if (localPlayer.rapierBody) {
+                             console.log(`[Predict] After Step: Body Pos: ${localPlayer.rapierBody.translation().x.toFixed(2)},${localPlayer.rapierBody.translation().y.toFixed(2)},${localPlayer.rapierBody.translation().z.toFixed(2)}`);
+                        }
                     }
                     // --- End Physics Simulation ---
 
@@ -566,9 +711,20 @@ function GameViewFPS({
                         localPlayer.mesh.visible = isThirdPersonView;
                         // NEW: Update mesh from predicted Rapier body state
                         if (localPlayer.rapierBody) {
+                            // Define capsule dimensions (must match server/client creation)
+                            const playerHeight = 1.8;
+                            const playerRadius = 0.4;
+                            const capsuleHalfHeight = playerHeight / 2;
+                            const visualMeshOffsetY = -capsuleHalfHeight; // Offset model down
+
                             const predictedPos = localPlayer.rapierBody.translation();
                             const predictedRot = localPlayer.rapierBody.rotation(); // Rapier returns {x,y,z,w}
-                            localPlayer.mesh.position.set(predictedPos.x, predictedPos.y, predictedPos.z);
+                            // >>> ADDED LOG <<<
+                            console.log(`[Predict] Syncing Mesh: Body Pos=(${predictedPos.x.toFixed(2)}, ${predictedPos.y.toFixed(2)}, ${predictedPos.z.toFixed(2)})`);
+                            // Apply offset to align model feet with capsule bottom
+                            localPlayer.mesh.position.set(predictedPos.x, predictedPos.y + visualMeshOffsetY, predictedPos.z);
+                            // >>> ADDED LOG <<<
+                            console.log(`[Predict] Syncing Mesh: Mesh Pos=(${localPlayer.mesh.position.x.toFixed(2)}, ${localPlayer.mesh.position.y.toFixed(2)}, ${localPlayer.mesh.position.z.toFixed(2)})`);
                             // Don't directly set mesh rotation from body if using third person lookAt
                             if (!isThirdPersonView) {
                                 // In first person, mesh (usually hidden) should match body rotation
@@ -611,14 +767,91 @@ function GameViewFPS({
                     // Render Scene
                     if (renderer && scene && camera) {
                         renderer.render(scene, camera);
-                        // No separate FPV render needed
+
+                        // >>> NEW: Re-added separate render pass for FPV <<< (Plan 2.1.2)
+                         if (fpvElements.camera) {
+                             renderer.autoClear = false; // Prevent clearing main scene render
+                             renderer.clearDepth(); // Clear depth buffer only
+                             renderer.render(scene, fpvElements.camera); // Render main scene FROM FPV camera POV? (Check this) - Or render separate FPV scene?
+                             // Let's assume we want to render fpvElements attached to main camera overlayed:
+                             // renderer.render(cameraGroupWithFPV, camera); // Need to ensure camera group setup
+                             // OR if fpv elements are in main scene, render main scene with FPV camera
+                              renderer.render(scene, fpvElements.camera);
+
+                              // Most likely: Render main scene with main camera, then overlay FPV elements
+                              // renderer.render(scene, camera); // Already done above
+                              // renderer.clearDepth();
+                              // fpvElements.camera.position.copy(camera.position); // Ensure FPV cam matches main cam
+                              // fpvElements.camera.quaternion.copy(camera.quaternion);
+                              // // Need a separate scene for FPV elements if doing true overlay
+                              // renderer.render(fpvScene, fpvElements.camera);
+
+                              // Let's try the simplest approach first: Render scene with main camera, then clear depth and render scene again with FPV camera
+                              // This relies on FPV elements being correctly positioned relative to FPV cam, and FPV cam relative to main cam.
+                             renderer.autoClear = true; // Restore auto clear
+                         }
+                    }
+
+                    // >>> NEW: Render Physics Debug Wireframes <<<
+                    if (rapierWorld && lines) {
+                         lines.visible = true; // Ensure debug lines are visible
+                         const buffers = rapierWorld.debugRender();
+                         lines.geometry.setAttribute('position', new THREE.BufferAttribute(buffers.vertices, 3));
+                         lines.geometry.setAttribute('color', new THREE.BufferAttribute(buffers.colors, 4));
+                         // Render the debug lines using the main camera
+                         // NO NEED TO CALL RENDER HERE - it happens once at the end of the loop
+                         // renderer.render(lines, camera);
+                    }
+
+                    if (!localPlayer.mesh) {
+                        console.warn('[DEBUG] localPlayer.mesh is missing!');
+                    }
+                    if (!localPlayer.rapierBody) {
+                        console.warn('[DEBUG] localPlayer.rapierBody is missing!');
+                    }
+                    if (!localState || localState.state !== 'alive') {
+                        console.warn('[DEBUG] localState is missing or not alive:', localState);
+                    }
+                    if (localPlayer.mesh && localPlayer.rapierBody) {
+                        console.log(`[DEBUG] Mesh position: (${localPlayer.mesh.position.x}, ${localPlayer.mesh.position.y}, ${localPlayer.mesh.position.z})`);
+                        console.log(`[DEBUG] Camera position: (${camera.position.x}, ${camera.position.y}, ${camera.position.z})`);
                     }
                 };
                 console.log("Starting render loop...");
                 renderLoopId = requestAnimationFrame(render); // Start the loop
 
                 // --- Socket.IO Connection --- (Refined Retry Logic)
-                const connectToServer = () => {
+                const connectToServer = () => { // <<< NOTE: Consider creating player body client-side here too for prediction
+                    // Example: Create client-side player body after rapier init
+                    // This body will be driven by prediction and corrected by server state.
+                    if (rapierWorld && !localPlayer.rapierBody) {
+                       console.log("Creating CLIENT-SIDE Rapier body for prediction...");
+                       // Use placeholder initial position, server state will correct it
+                       const initialClientPos = {x:0, y:1, z:0};
+                       const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
+                         .setTranslation(initialClientPos.x, initialClientPos.y, initialClientPos.z)
+                         .setCanSleep(false).setCcdEnabled(true); // Removed .lockRotations()
+                       const body = rapierWorld.createRigidBody(bodyDesc);
+                       const playerHeight = 1.8; const playerRadius = 0.4;
+                       const colliderDesc = RAPIER.ColliderDesc.capsule(playerHeight / 2 - playerRadius, playerRadius);
+                       // Apply properties after creation
+                       colliderDesc.setDensity(1.0);
+                       colliderDesc.setFriction(0.7);
+                       colliderDesc.setRestitution(0.2);
+                       // NEW: Set Collision Groups for client player body
+                       colliderDesc.setCollisionGroups(interactionGroups(
+                           CollisionGroup.PLAYER_BODY,
+                           [CollisionGroup.WORLD, CollisionGroup.PLAYER_BODY, CollisionGroup.GRENADE] // Match server player body interactions
+                       ));
+                       // Set active events AFTER setting groups
+                       colliderDesc.setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
+
+                       const collider = rapierWorld.createCollider(colliderDesc, body);
+                       collider.userData = { type: 'playerBody', playerId: localPlayerUserId }; // Set userData on the created collider
+                       localPlayer.rapierBody = body;
+                       console.log("Client-side Rapier body created.");
+                    }
+
                     if (!isMounted || socketRef.current?.connected || connectionStatus === 'connecting') return; // Prevent multiple concurrent attempts
 
                     console.log(`Attempting connection (Attempt: ${retryAttempt + 1})...`);
@@ -650,7 +883,44 @@ function GameViewFPS({
 
                         // Setup listeners
                         newSocket.on(MessageTypeFPS.GAME_STATE_FPS, (gameState) => {
+                            console.log('[DEBUG] Received GAME_STATE_FPS:', gameState);
                             if (!isMounted) return;
+                            const serverPlayerState = gameState.players?.[localPlayerUserId];
+
+                            // Apply reconciliation if server state received
+                            if (serverPlayerState && serverPlayerState.lastProcessedSequence !== undefined && localPlayer.rapierBody) {
+                                const lastProcessedSequence = serverPlayerState.lastProcessedSequence;
+
+                                // Remove acknowledged inputs from pending buffer
+                                inputStateRef.current.pendingInputs = inputStateRef.current.pendingInputs.filter(
+                                    input => input.sequence > lastProcessedSequence
+                                );
+
+                                // Reset client physics state to authoritative server state
+                                localPlayer.rapierBody.setTranslation(serverPlayerState.position, true);
+                                localPlayer.rapierBody.setRotation(serverPlayerState.rotation, true);
+                                localPlayer.rapierBody.setLinvel(serverPlayerState.velocity, true);
+                                localPlayer.rapierBody.setAngvel({ x: 0, y: 0, z: 0 }, true); // Reset angular velocity too
+
+                                // Re-apply pending (unacknowledged) inputs on top of server state
+                                inputStateRef.current.pendingInputs.forEach(input => {
+                                    // Use the same physics application function
+                                    applyInputPhysics(localPlayer.rapierBody, input.keys, input.lookQuat, input.deltaTime);
+                                    // Optionally, re-step the physics world for each pending input?
+                                    // rapierWorld?.step(); // This might be too expensive
+                                });
+                                // After re-applying inputs, the rapierBody is now the corrected predicted state
+
+                            } else if (serverPlayerState && localPlayer.rapierBody) {
+                                // No sequence number? Maybe initial state or server doesn't support reconciliation fully yet.
+                                // Just hard-set state without replaying inputs for now.
+                                localPlayer.rapierBody.setTranslation(serverPlayerState.position, true);
+                                localPlayer.rapierBody.setRotation(serverPlayerState.rotation, true);
+                                localPlayer.rapierBody.setLinvel(serverPlayerState.velocity, true);
+                                localPlayer.rapierBody.setAngvel({ x: 0, y: 0, z: 0 }, true);
+                            }
+
+                            // Always update the overall game state for rendering remote players, HUD, etc.
                             setCurrentGameState(prevState => ({ ...(prevState || {}), ...gameState }));
                         });
                         // Add other listeners...
