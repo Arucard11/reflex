@@ -18,7 +18,7 @@ import {
     CollisionGroup,
     interactionGroups
 } from '@shared-types/game-fps';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
+import DebugControls from './DebugControls'; // Import DebugControls
 
 // Define props based on Universal Standard (II.1)
 function GameViewFPS({
@@ -41,16 +41,27 @@ function GameViewFPS({
     // NEW: Ref for current animation state - Separate refs for player and FPV
     const currentPlayerActionRef = useRef(null);
     const currentFpvActionRef = useRef(null); // Ref for currently playing FPV animation
-    const linesRef = useRef(null); // <-- Move this here
+    const gameStateRef = useRef(null);
+    const [gameStateVersion, setGameStateVersion] = useState(0); // Only for UI updates
+
+    // --- Refs for Three.js/Rapier objects ---
+    const cameraRef = useRef(null);
+    const rendererRef = useRef(null);
+    const sceneRef = useRef(null);
+    const rapierWorldRef = useRef(null);
+    const localPlayerRef = useRef({ mesh: null, rapierBody: null, mixer: null });
+    const remotePlayerRef = useRef({ mesh: null, mixer: null });
+    const fpvElementsRef = useRef({ camera: null, weaponModels: {}, grappleRopeMaterial: null });
+    const playerAnimationActionsRef = useRef({});
+    const renderLoopIdRef = useRef(null); // Ref for render loop ID
 
     // State for loading/connection status
     const [isLoading, setIsLoading] = useState(true);
     // Provide more detailed statuses
     const [connectionStatus, setConnectionStatus] = useState('disconnected'); // 'connecting', 'connected', 'error', 'retrying', 'disconnected'
     const [retryAttempt, setRetryAttempt] = useState(0); // Track retry attempts
-    // NEW: Add state to hold the merged game state received from server (Plan 1.1.2)
-    const gameStateRef = useRef(null);
-    const [gameStateVersion, setGameStateVersion] = useState(0); // Only for UI updates
+    // RE-ADD State for triggering prop update to DebugControls
+    const [isDebugModeEnabled, setIsDebugModeEnabled] = useState(false);
 
     // Max retries
     const MAX_RETRIES = 5;
@@ -157,68 +168,88 @@ function GameViewFPS({
         const abortController = new AbortController();
         let isMounted = true; // Flag to check if component is still mounted in async operations
 
-        // Refs for game objects (moved outside initGame)
-        let renderer, scene, camera, rapierWorld, renderLoopId;
-        let localPlayer = { mesh: null, rapierBody: null, mixer: null };
-        let remotePlayer = { mesh: null, mixer: null };
-        let physicsDebugRenderer = null; // <<< NEW: Ref for debug renderer
-        // MODIFIED: Updated fpvElements structure
-        let fpvElements = {
-            camera: null,
-            weaponModels: {}, // { weaponId: { model: THREE.Group, mixer: THREE.AnimationMixer, animations: { animName: THREE.AnimationClip } } }
-            grappleRopeMaterial: null,
-        };
-        let playerAnimationActions = {}; // Store shared player animations
+        // Use refs directly instead of local variables
+        // let renderer, scene, camera, rapierWorld, renderLoopId;
+        // let localPlayer = { mesh: null, rapierBody: null, mixer: null };
+        // let remotePlayer = { mesh: null, mixer: null };
+        // let fpvElements = { camera: null, weaponModels: {}, grappleRopeMaterial: null };
+        // let playerAnimationActions = {};
 
         // >>> NEW: Move Input Handlers outside initGame <<< Plan 2.2.1 / 2.2.2
         const handleKeyDown = (event) => {
             console.log(`[DEBUG] KeyDown: code=${event.code}, key=${event.key}`);
-            // Prevent browser default actions for game keys
-            if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'ShiftLeft', 'KeyC'].includes(event.code)) {
+
+            // --- Handle Debug Toggle Key ('B') - Use State ---
+            if (event.code === 'KeyB') {
+                event.preventDefault(); // Prevent browser 'b' input
+
+                // Decide the *next* state for the ref
+                const nextIsEnabled = !isDebugModeEnabled;
+
+                if (nextIsEnabled) {
+                    // If ENABLING debug mode, exit pointer lock FIRST
+                    console.log('Requesting exit from pointer lock...');
+                    document.exitPointerLock();
+                } else {
+                    // If DISABLING debug mode, request pointer lock (requires user click)
+                    console.log('Debug mode disabled. Click canvas to re-lock pointer.');
+                    // canvasRef.current?.requestPointerLock(); // Don't force it here
+                }
+
+                // Now update the ref AFTER handling pointer lock
+                // Update State (triggers re-render and prop update)
+                setIsDebugModeEnabled(nextIsEnabled);
+                // Keep ref in sync for internal logic
+                cameraModeRef.current.isOrbital = nextIsEnabled;
+                console.log(`Debug mode toggled via state: ${nextIsEnabled}.`);
+
+                return; // Stop processing other keys if 'B' was pressed
+            }
+            // --- End Debug Toggle Key ---
+
+            // Prevent browser default actions for game keys *if pointer is locked*
+            if (document.pointerLockElement && [
+                'KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'ShiftLeft', 'KeyC'
+                // Add other game action keys here that might have browser defaults
+            ].includes(event.code)) {
                 event.preventDefault();
             }
 
-            // Map event.code to inputState keys (more robust than event.key)
-            switch (event.code) {
-                case 'KeyW': inputStateRef.current.keys.W = true; break;
-                case 'KeyA': inputStateRef.current.keys.A = true; break;
-                case 'KeyS': inputStateRef.current.keys.S = true; break;
-                case 'KeyD': inputStateRef.current.keys.D = true; break;
-                case 'Space': inputStateRef.current.keys.Space = true; break;
-                case 'ShiftLeft': inputStateRef.current.keys.Shift = true; break;
-                // NEW: Toggle Camera Key
-                case 'KeyC': inputStateRef.current.keys.C = true; break;
-                // Add other keys later (Ability, Grenade, Reload, etc.)
-                case 'KeyB': // B key for debug camera
-                    cameraModeRef.current.isOrbital = !cameraModeRef.current.isOrbital;
-                    if (cameraModeRef.current.isOrbital) {
-                        console.log('Enabling orbital debug camera');
-                        document.exitPointerLock();
-                    }
-                    break;
+            // Map event.code to inputState keys (only when pointer locked)
+            if (document.pointerLockElement) {
+                switch (event.code) {
+                    case 'KeyW': inputStateRef.current.keys.W = true; break;
+                    case 'KeyA': inputStateRef.current.keys.A = true; break;
+                    case 'KeyS': inputStateRef.current.keys.S = true; break;
+                    case 'KeyD': inputStateRef.current.keys.D = true; break;
+                    case 'Space': inputStateRef.current.keys.Space = true; break;
+                    case 'ShiftLeft': inputStateRef.current.keys.Shift = true; break;
+                    case 'KeyC': inputStateRef.current.keys.C = true; break; // Camera toggle still needs lock
+                    // Add other game action keys here...
+                }
             }
         };
         const handleKeyUp = (event) => {
             console.log(`[DEBUG] KeyUp: code=${event.code}, key=${event.key}`);
-            // Prevent browser default actions for game keys
-            if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'ShiftLeft', 'KeyC'].includes(event.code)) {
-                event.preventDefault();
-            }
 
-            switch (event.code) {
-                case 'KeyW': inputStateRef.current.keys.W = false; break;
-                case 'KeyA': inputStateRef.current.keys.A = false; break;
-                case 'KeyS': inputStateRef.current.keys.S = false; break;
-                case 'KeyD': inputStateRef.current.keys.D = false; break;
-                case 'Space': inputStateRef.current.keys.Space = false; break;
-                case 'ShiftLeft': inputStateRef.current.keys.Shift = false; break;
-                // NEW: Toggle Camera Key Release
-                case 'KeyC':
-                    if (inputStateRef.current.keys.C) {
-                        cameraModeRef.current.isThirdPerson = !cameraModeRef.current.isThirdPerson;
-                    }
-                    inputStateRef.current.keys.C = false; break;
-                // Add other keys later
+            // Only process game key releases if pointer was locked during release
+            // or if the key being released is the debug key itself.
+            if (document.pointerLockElement || event.code === 'KeyB') {
+                switch (event.code) {
+                    case 'KeyW': inputStateRef.current.keys.W = false; break;
+                    case 'KeyA': inputStateRef.current.keys.A = false; break;
+                    case 'KeyS': inputStateRef.current.keys.S = false; break;
+                    case 'KeyD': inputStateRef.current.keys.D = false; break;
+                    case 'Space': inputStateRef.current.keys.Space = false; break;
+                    case 'ShiftLeft': inputStateRef.current.keys.Shift = false; break;
+                    // Camera toggle on KeyUp only if it was pressed down
+                    case 'KeyC':
+                        if (inputStateRef.current.keys.C) {
+                            cameraModeRef.current.isThirdPerson = !cameraModeRef.current.isThirdPerson;
+                        }
+                        inputStateRef.current.keys.C = false; break;
+                    // Add other keys later
+                }
             }
         };
 
@@ -229,24 +260,24 @@ function GameViewFPS({
             console.log('Pointer Lock Element:', document.pointerLockElement);
 
             // Need camera defined before use - ensure initGame runs first or check existence
-            if (!document.pointerLockElement || !camera) return;
+            if (!document.pointerLockElement || !cameraRef.current) return;
 
             const movementX = event.movementX || 0;
             const movementY = event.movementY || 0;
             const sensitivity = 0.002;
 
             const euler = new THREE.Euler(0, 0, 0, 'YXZ');
-            euler.setFromQuaternion(camera.quaternion);
+            euler.setFromQuaternion(cameraRef.current.quaternion);
             euler.y -= movementX * sensitivity;
             euler.x -= movementY * sensitivity;
             euler.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, euler.x));
-            camera.quaternion.setFromEuler(euler);
+            cameraRef.current.quaternion.setFromEuler(euler);
 
             // Update lookQuat in input state
-            inputStateRef.current.lookQuat.x = camera.quaternion.x;
-            inputStateRef.current.lookQuat.y = camera.quaternion.y;
-            inputStateRef.current.lookQuat.z = camera.quaternion.z;
-            inputStateRef.current.lookQuat.w = camera.quaternion.w;
+            inputStateRef.current.lookQuat.x = cameraRef.current.quaternion.x;
+            inputStateRef.current.lookQuat.y = cameraRef.current.quaternion.y;
+            inputStateRef.current.lookQuat.z = cameraRef.current.quaternion.z;
+            inputStateRef.current.lookQuat.w = cameraRef.current.quaternion.w;
         };
 
         const handlePointerLockChange = () => {
@@ -261,7 +292,8 @@ function GameViewFPS({
 
         // --- Animation Helper (Modified for FPV Target) ---
         const playFpvAnimation = (weaponId, actionName, loop = true) => {
-            const weaponData = fpvElements.weaponModels[weaponId];
+            // Access FPV elements via ref
+            const weaponData = fpvElementsRef.current.weaponModels[weaponId];
             if (!weaponData || !weaponData.mixer || !weaponData.animations || !weaponData.animations[actionName]) {
                 // console.warn(`FPV Animation '${actionName}' not found for weapon '${weaponId}' or mixer invalid.`);
                 return null; // Return null if action not found or invalid
@@ -317,26 +349,30 @@ function GameViewFPS({
                 console.log("Loaders created."); // Log progress
 
                 // --- Three.js Core Setup ---
-                renderer = new THREE.WebGLRenderer({ canvas: canvasElement, antialias: true });
-                renderer.setSize(canvasElement.clientWidth, canvasElement.clientHeight);
-                renderer.setPixelRatio(window.devicePixelRatio);
-                renderer.shadowMap.enabled = true;
-                scene = new THREE.Scene();
-                scene.background = new THREE.Color(0x6699cc); // Example sky blue
-                camera = new THREE.PerspectiveCamera(75, canvasElement.clientWidth / canvasElement.clientHeight, 0.1, 1000);
-                camera.position.set(0, 1.6, 5); // Initial placeholder position
-                scene.add(camera);
+                // Assign to refs
+                rendererRef.current = new THREE.WebGLRenderer({ canvas: canvasElement, antialias: true });
+                rendererRef.current.setSize(canvasElement.clientWidth, canvasElement.clientHeight);
+                rendererRef.current.setPixelRatio(window.devicePixelRatio);
+                rendererRef.current.shadowMap.enabled = true;
+
+                sceneRef.current = new THREE.Scene();
+                sceneRef.current.background = new THREE.Color(0x6699cc); // Example sky blue
+
+                cameraRef.current = new THREE.PerspectiveCamera(75, canvasElement.clientWidth / canvasElement.clientHeight, 0.1, 1000);
+                cameraRef.current.position.set(0, 1.6, 5); // Initial placeholder position
+                sceneRef.current.add(cameraRef.current);
+
                 // >>> MODIFIED: Adjust FPV camera position <<<
-                fpvElements.camera = new THREE.PerspectiveCamera(60, canvasElement.clientWidth / canvasElement.clientHeight, 0.01, 100);
-                // Don't set FPV camera position here, it will follow main camera
-                // fpvElements.camera.position.set(0, -1.6, 5);
-                camera.add(fpvElements.camera); // Attach FPV camera to main camera
+                // Assign FPV camera to ref
+                fpvElementsRef.current.camera = new THREE.PerspectiveCamera(60, canvasElement.clientWidth / canvasElement.clientHeight, 0.01, 100);
+                cameraRef.current.add(fpvElementsRef.current.camera); // Attach FPV camera to main camera
+
                 const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
-                scene.add(ambientLight);
+                sceneRef.current.add(ambientLight);
                 const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
                 directionalLight.position.set(10, 15, 5);
                 directionalLight.castShadow = true; // Enable shadows
-                scene.add(directionalLight);
+                sceneRef.current.add(directionalLight);
                 console.log("Three.js core setup complete."); // Log progress
 
                 // --- Load Map Visuals (NEW) ---
@@ -349,11 +385,10 @@ function GameViewFPS({
                         node.receiveShadow = true;
                     }
                 });
-                scene.add(mapMesh);
+                sceneRef.current.add(mapMesh); // Add to scene via ref
                 console.log(`Map ${mapId} visuals loaded.`);
 
                 // --- Load Character Models ---
-                // REVERTING to previous logic which seems correct based on user feedback
                 console.log("Loading character models...");
                 const localModelPath = localCharConfig.modelPath;
                 const remoteModelPath = remoteCharConfig.modelPath;
@@ -370,33 +405,35 @@ function GameViewFPS({
                     throw error;
                 }
 
-                localPlayer.mesh = localCharacterGltf.scene;
-                remotePlayer.mesh = remoteCharacterGltf.scene;
+                // Assign to refs
+                localPlayerRef.current.mesh = localCharacterGltf.scene;
+                remotePlayerRef.current.mesh = remoteCharacterGltf.scene;
 
-                playerAnimationActions = {};
+                playerAnimationActionsRef.current = {}; // Use ref
                 localCharacterGltf.animations.forEach(clip => {
-                    playerAnimationActions[clip.name] = clip;
+                    playerAnimationActionsRef.current[clip.name] = clip; // Assign to ref
                 });
 
-                localPlayer.mesh.traverse(node => { if (node.isMesh) node.castShadow = true; });
-                remotePlayer.mesh.traverse(node => { if (node.isMesh) node.castShadow = true; });
-                scene.add(localPlayer.mesh);
-                scene.add(remotePlayer.mesh);
-                localPlayer.mesh.visible = false;
-                remotePlayer.mesh.visible = false;
+                localPlayerRef.current.mesh.traverse(node => { if (node.isMesh) node.castShadow = true; });
+                remotePlayerRef.current.mesh.traverse(node => { if (node.isMesh) node.castShadow = true; });
+                sceneRef.current.add(localPlayerRef.current.mesh); // Add to scene via ref
+                sceneRef.current.add(remotePlayerRef.current.mesh); // Add to scene via ref
+                localPlayerRef.current.mesh.visible = false;
+                remotePlayerRef.current.mesh.visible = false;
 
-                localPlayer.mixer = new THREE.AnimationMixer(localPlayer.mesh);
-                remotePlayer.mixer = new THREE.AnimationMixer(remotePlayer.mesh);
+                // Assign to refs
+                localPlayerRef.current.mixer = new THREE.AnimationMixer(localPlayerRef.current.mesh);
+                remotePlayerRef.current.mixer = new THREE.AnimationMixer(remotePlayerRef.current.mesh);
                 console.log("Character models loaded and mixers created.");
 
                 // ... after loading localPlayer.mesh and remotePlayer.mesh, before adding to scene ...
-                localPlayer.mesh.scale.set(0.3, 0.3, 0.3); // DEBUG: Reduce character size
-                remotePlayer.mesh.scale.set(0.3, 0.3, 0.3); // DEBUG: Reduce character size
+                localPlayerRef.current.mesh.scale.set(0.3, 0.3, 0.3); // DEBUG: Reduce character size
+                remotePlayerRef.current.mesh.scale.set(0.3, 0.3, 0.3); // DEBUG: Reduce character size
                 console.log('[DEBUG] Character model scale set to (0.3, 0.3, 0.3)');
 
                 // --- Load FPV Arms/Weapons (NEW - logic from 2.1.2 adapted) ---
                 console.log("Loading FPV assets...");
-                fpvElements.weaponModels = {}; // Reset before loading
+                fpvElementsRef.current.weaponModels = {}; // Reset via ref
 
                 for (const weaponId in WEAPON_CONFIG_FPS) {
                     const weaponConfig = WEAPON_CONFIG_FPS[weaponId];
@@ -433,14 +470,14 @@ function GameViewFPS({
                         // Create mixer for this weapon model
                         const weaponMixer = new THREE.AnimationMixer(weaponGroup);
 
-                        // Store model, mixer, and animations together
-                        fpvElements.weaponModels[weaponId] = {
+                        // Store model, mixer, and animations together in ref
+                        fpvElementsRef.current.weaponModels[weaponId] = {
                             model: weaponGroup,
                             mixer: weaponMixer,
                             animations: weaponAnimations,
                         };
 
-                        fpvElements.camera.add(weaponGroup); // Add to FPV camera
+                        fpvElementsRef.current.camera.add(weaponGroup); // Add to FPV camera via ref
 
                         // Set the actual FPV weapon position
                         weaponGroup.position.set(0.12, -0.18, -0.01); // Default FPV: Right, Down, Close
@@ -458,22 +495,17 @@ function GameViewFPS({
                 console.log("Finished loading FPV assets."); // Log completion
 
                 // --- Load Grapple Visuals ---
-                fpvElements.grappleRopeMaterial = new THREE.LineBasicMaterial({ color: 0xffffff, linewidth: 2 });
+                // Assign to ref
+                fpvElementsRef.current.grappleRopeMaterial = new THREE.LineBasicMaterial({ color: 0xffffff, linewidth: 2 });
                 console.log("Grapple visuals placeholder ready."); // Log progress
 
                 // --- Rapier Setup ---
                 console.log('Initializing Client Rapier...');
                 await RAPIER.init();
                 if (!isMounted) return; // Check after await
-                rapierWorld = new RAPIER.World({ x: 0.0, y: -9.81, z: 0.0 });
+                // Assign to ref
+                rapierWorldRef.current = new RAPIER.World({ x: 0.0, y: -9.81, z: 0.0 });
                 console.log('Client Rapier World created.'); // Log progress
-
-                // >>> NEW: Move debug lines creation here, assign to outer scope variable <<<
-                linesRef.current = new THREE.LineSegments(
-                    new THREE.BufferGeometry(),
-                    new THREE.LineBasicMaterial({ color: 0xffffff, vertexColors: true })
-                );
-                scene.add(linesRef.current);
 
                 // --- Load Map Physics (Client - Mirroring server 1.2.2) ---
                 console.log(`Loading Client Physics for Map ID: ${mapId}...`);
@@ -489,7 +521,7 @@ function GameViewFPS({
                         console.log(`[Client Physics Load] Attempting to load TR MESH...`);
                         try {
                             const rigidBodyDesc = RAPIER.RigidBodyDesc.fixed();
-                            const body = rapierWorld.createRigidBody(rigidBodyDesc);
+                            const body = rapierWorldRef.current.createRigidBody(rigidBodyDesc);
                             const trimeshDesc = RAPIER.ColliderDesc.trimesh(clientPhysicsData.vertices, clientPhysicsData.indices);
                             console.log(`[Client Physics Load] TrimeshDesc created.`);
 
@@ -501,7 +533,8 @@ function GameViewFPS({
                             trimeshDesc.setCollisionGroups(groups);
                             console.log(`[Client Physics Load] Trimesh Set collision groups to:`, groups);
 
-                            const collider = rapierWorld.createCollider(trimeshDesc, body);
+                            // Use rapierWorldRef
+                            const collider = rapierWorldRef.current.createCollider(trimeshDesc, body);
                             console.log(`[Client Physics Load] SUCCESS: Created client trimesh map collider handle: ${collider.handle}`);
                         } catch (error) {
                             console.error(`[Client Physics Load] ERROR: Failed to create client trimesh collider for map ${mapId}:`, error);
@@ -548,8 +581,9 @@ function GameViewFPS({
                                 colliderDesc.setCollisionGroups(groups); // <<< ADDED MISSING CALL
                                 console.log(`[Client Collider ${index}] Set collision groups to:`, groups);
 
-                                const body = rapierWorld.createRigidBody(rigidBodyDesc);
-                                const collider = rapierWorld.createCollider(colliderDesc, body);
+                                // Use rapierWorldRef
+                                const body = rapierWorldRef.current.createRigidBody(rigidBodyDesc);
+                                const collider = rapierWorldRef.current.createCollider(colliderDesc, body);
                                 console.log(`[Client Collider ${index}] Created map collider handle: ${collider.handle} attached to body handle: ${body.handle}`);
                             } else {
                                 console.warn(`[Client Collider ${index}] Failed to create ColliderDesc.`);
@@ -562,12 +596,13 @@ function GameViewFPS({
 
                 // --- Resize Handling ---
                 const handleResize = () => {
-                    if (!renderer || !camera || !canvasElement) return;
+                    // Access via refs
+                    if (!rendererRef.current || !cameraRef.current || !canvasElement) return;
                     const width = canvasElement.clientWidth;
                     const height = canvasElement.clientHeight;
-                    renderer.setSize(width, height);
-                    camera.aspect = width / height;
-                    camera.updateProjectionMatrix();
+                    rendererRef.current.setSize(width, height);
+                    cameraRef.current.aspect = width / height;
+                    cameraRef.current.updateProjectionMatrix();
                     // FPV camera uses main camera aspect ratio
                 };
                 window.addEventListener('resize', handleResize, { signal: abortController.signal });
@@ -595,6 +630,7 @@ function GameViewFPS({
                             console.log('[PointerLock] Attempting to request pointer lock...');
                             if (typeof canvasElement.requestPointerLock === 'function') {
                                 canvasElement.requestPointerLock(); // No .catch(), synchronous in most browsers
+                                cameraModeRef.current.isOrbital = false; // <<< Disable debug when locking pointer
                                 // >>> ADDED LOG <<<
                                 console.log('[PointerLock] requestPointerLock() called.');
                             } else {
@@ -619,11 +655,9 @@ function GameViewFPS({
                 const tempCameraPos = new THREE.Vector3();
                 const tempLookAt = new THREE.Vector3();
 
-                let orbitControls = null;
-
                 const render = (timestamp) => {
                     if (!isMounted) return;
-                    renderLoopId = requestAnimationFrame(render);
+                    renderLoopIdRef.current = requestAnimationFrame(render);
 
                     const deltaTime = Math.min(0.05, (timestamp - lastTimestamp) / 1000); // Clamp delta time
                     const mixerDeltaTime = clock.getDelta(); // Use clock delta for mixers
@@ -656,33 +690,33 @@ function GameViewFPS({
 
                     // --- Physics Simulation --- (NEW - Step 2.2.1 Client Prediction)
                     // 1. Apply Local Input Prediction (Before stepping world)
-                    if (localPlayer.rapierBody && localState && localState.state === 'alive') {
+                    if (localPlayerRef.current.rapierBody && localState && localState.state === 'alive') {
                         // >>> ADDED LOG <<<
-                        console.log(`[Predict] Applying input: W=${inputStateRef.current.keys.W} | Body Vel: ${localPlayer.rapierBody.linvel().x.toFixed(2)},${localPlayer.rapierBody.linvel().y.toFixed(2)},${localPlayer.rapierBody.linvel().z.toFixed(2)}`);
+                        console.log(`[Predict] Applying input: W=${inputStateRef.current.keys.W} | Body Vel: ${localPlayerRef.current.rapierBody.linvel().x.toFixed(2)},${localPlayerRef.current.rapierBody.linvel().y.toFixed(2)},${localPlayerRef.current.rapierBody.linvel().z.toFixed(2)}`);
                         // Apply physics using the helper function
-                        applyInputPhysics(localPlayer.rapierBody, inputStateRef.current.keys, inputStateRef.current.lookQuat, deltaTime);
+                        applyInputPhysics(localPlayerRef.current.rapierBody, inputStateRef.current.keys, inputStateRef.current.lookQuat, deltaTime);
                     }
 
                     // 2. Step Client Physics World
-                    if (rapierWorld) {
-                        rapierWorld.step();
+                    if (rapierWorldRef.current) {
+                        rapierWorldRef.current.step();
                         // >>> ADDED LOG <<<
-                        if (localPlayer.rapierBody) {
-                             console.log(`[Predict] After Step: Body Pos: ${localPlayer.rapierBody.translation().x.toFixed(2)},${localPlayer.rapierBody.translation().y.toFixed(2)},${localPlayer.rapierBody.translation().z.toFixed(2)}`);
+                        if (localPlayerRef.current.rapierBody) {
+                             console.log(`[Predict] After Step: Body Pos: ${localPlayerRef.current.rapierBody.translation().x.toFixed(2)},${localPlayerRef.current.rapierBody.translation().y.toFixed(2)},${localPlayerRef.current.rapierBody.translation().z.toFixed(2)}`);
                         }
                     }
                     // --- End Physics Simulation ---
 
                     // --- Update Player Mixers ---
-                    localPlayer.mixer?.update(mixerDeltaTime);
-                    remotePlayer.mixer?.update(mixerDeltaTime);
+                    localPlayerRef.current.mixer?.update(mixerDeltaTime);
+                    remotePlayerRef.current.mixer?.update(mixerDeltaTime);
 
                     // --- Update FPV Mixers & Animation ---
                     let activeWeaponId = null;
                     let activeFpvMixer = null;
                     if (localState && localState.weaponSlots && localState.activeWeaponSlot !== undefined) {
                         activeWeaponId = localState.weaponSlots[localState.activeWeaponSlot];
-                        const activeWeaponData = fpvElements.weaponModels[activeWeaponId];
+                        const activeWeaponData = fpvElementsRef.current.weaponModels[activeWeaponId];
                         if (activeWeaponData?.mixer) {
                             activeFpvMixer = activeWeaponData.mixer;
                             activeFpvMixer.update(mixerDeltaTime); // Update the active FPV mixer
@@ -709,137 +743,124 @@ function GameViewFPS({
                     // --- Update FPV Weapon Visibility ---
                     // >> NEW: Control overall FPV camera visibility first <<
                     const isFirstPerson = !cameraModeRef.current.isThirdPerson && !cameraModeRef.current.isOrbital;
-                    if (fpvElements.camera) {
-                        fpvElements.camera.visible = isFirstPerson;
+                    if (fpvElementsRef.current.camera) {
+                        fpvElementsRef.current.camera.visible = isFirstPerson;
                     }
                     // >> END NEW <<
 
                     // Keep this logic: Only make the *active* weapon model visible *when* FPV is active
-                    for (const weaponId in fpvElements.weaponModels) {
-                        const weaponData = fpvElements.weaponModels[weaponId];
+                    for (const weaponId in fpvElementsRef.current.weaponModels) {
+                        const weaponData = fpvElementsRef.current.weaponModels[weaponId];
                         if (weaponData?.model) {
                             weaponData.model.visible = isFirstPerson && (weaponId === activeWeaponId);
                         }
                     }
 
                     // --- Update Player Mesh Visibility & Position (Placeholder) ---
-                    if (localPlayer.mesh) {
-                        localPlayer.mesh.visible = cameraModeRef.current.isThirdPerson;
+                    if (localPlayerRef.current.mesh) {
+                        localPlayerRef.current.mesh.visible = cameraModeRef.current.isThirdPerson;
                         // NEW: Update mesh from predicted Rapier body state
-                        if (localPlayer.rapierBody) {
+                        if (localPlayerRef.current.rapierBody) {
                             // Define capsule dimensions (must match server/client creation)
                             const playerHeight = 1.8;
                             const playerRadius = 0.4;
                             const capsuleHalfHeight = playerHeight / 2;
-                            const visualMeshOffsetY = -capsuleHalfHeight; // Offset model down
+                            // Assuming model pivot is at its feet, no vertical offset needed relative to capsule bottom
+                            const visualMeshOffsetY = 0; // <<< CHANGE OFFSET TO 0
 
-                            const predictedPos = localPlayer.rapierBody.translation();
-                            const predictedRot = localPlayer.rapierBody.rotation(); // Rapier returns {x,y,z,w}
+                            const predictedPos = localPlayerRef.current.rapierBody.translation(); // Center of capsule
+                            const predictedRot = localPlayerRef.current.rapierBody.rotation(); // Rapier returns {x,y,z,w}
                             // >>> ADDED LOG <<<
                             console.log(`[Predict] Syncing Mesh: Body Pos=(${predictedPos.x.toFixed(2)}, ${predictedPos.y.toFixed(2)}, ${predictedPos.z.toFixed(2)})`);
-                            // Apply offset to align model feet with capsule bottom
-                            localPlayer.mesh.position.set(predictedPos.x, predictedPos.y + visualMeshOffsetY, predictedPos.z);
+                            
+                            // Position mesh origin (feet) at the bottom of the physics capsule
+                            localPlayerRef.current.mesh.position.set(
+                                predictedPos.x,
+                                predictedPos.y - capsuleHalfHeight + visualMeshOffsetY, // <<< ADJUST POSITIONING
+                                predictedPos.z
+                            );
                             // >>> ADDED LOG <<<
-                            console.log(`[Predict] Syncing Mesh: Mesh Pos=(${localPlayer.mesh.position.x.toFixed(2)}, ${localPlayer.mesh.position.y.toFixed(2)}, ${localPlayer.mesh.position.z.toFixed(2)})`);
+                            console.log(`[Predict] Syncing Mesh: Mesh Pos=(${localPlayerRef.current.mesh.position.x.toFixed(2)}, ${localPlayerRef.current.mesh.position.y.toFixed(2)}, ${localPlayerRef.current.mesh.position.z.toFixed(2)})`);
                             // Don't directly set mesh rotation from body if using third person lookAt
                             if (!cameraModeRef.current.isThirdPerson) {
                                 // In first person, mesh (usually hidden) should match body rotation
-                                localPlayer.mesh.quaternion.set(predictedRot.x, predictedRot.y, predictedRot.z, predictedRot.w);
+                                localPlayerRef.current.mesh.quaternion.set(predictedRot.x, predictedRot.y, predictedRot.z, predictedRot.w);
                             }
                         } else if (localState && localState.position && localState.rotation) {
                             // Fallback to lerping server state if body missing (e.g., before spawn)
-                            localPlayer.mesh.position.lerp(localState.position, 0.3);
-                            localPlayer.mesh.quaternion.slerp(localState.rotation, 0.3);
+                            localPlayerRef.current.mesh.position.lerp(localState.position, 0.3);
+                            localPlayerRef.current.mesh.quaternion.slerp(localState.rotation, 0.3);
                         }
                     }
-                    if (remotePlayer.mesh) {
+                    if (remotePlayerRef.current.mesh) {
                          const remoteState = gameStateRef.current?.players?.[opponentPlayerId];
                          if (remoteState && remoteState.position && remoteState.rotation) {
-                            remotePlayer.mesh.visible = true; // Show remote player always
-                            remotePlayer.mesh.position.lerp(remoteState.position, 0.3);
-                            remotePlayer.mesh.quaternion.slerp(remoteState.rotation, 0.3);
+                            remotePlayerRef.current.mesh.visible = true; // Show remote player always
+                            // NEW: Calculate offset like local player
+                            const playerHeight = 1.8; // Assume same height
+                            const playerRadius = 0.4;
+                            const capsuleHalfHeight = playerHeight / 2 - playerRadius;
+                            const visualMeshOffsetY = 0;
+                            const targetPosition = new THREE.Vector3(
+                                remoteState.position.x,
+                                remoteState.position.y - capsuleHalfHeight + visualMeshOffsetY, // Apply offset
+                                remoteState.position.z
+                            );
+                            remotePlayerRef.current.mesh.position.lerp(targetPosition, 0.3); // Lerp to the adjusted target
+                            // END NEW
+                            remotePlayerRef.current.mesh.quaternion.slerp(remoteState.rotation, 0.3);
                         } else {
-                            remotePlayer.mesh.visible = false;
+                            remotePlayerRef.current.mesh.visible = false;
                          }
                     }
 
                     // --- Camera Controls Setup ---
-                    if (cameraModeRef.current.isOrbital) {
-                        if (!orbitControls && camera && renderer?.domElement) {
-                            // Add null check for camera and renderer.domElement
-                            if (!document.body.contains(renderer.domElement)) {
-                                console.error('Renderer DOM element not attached to document');
-                                return;
-                            }
-                            
-                            // Verify camera has valid matrix
-                            camera.updateMatrixWorld();
-                            orbitControls = new OrbitControls(camera, renderer.domElement);
-                            orbitControls.enableDamping = true;
-                            orbitControls.dampingFactor = 0.05;
-                            orbitControls.screenSpacePanning = true;
-                            orbitControls.minDistance = 1;
-                            orbitControls.maxDistance = 50;
-                            
-                            // Force initial update
-                            orbitControls.update();
-                        }
-                    } else if (orbitControls) {
-                        orbitControls.dispose();
-                        orbitControls = null;
-                    }
+                    // OrbitControls logic removed, handled by DebugControls
 
                     // --- Update Camera Position ---
-                    if (orbitControls) {
-                        orbitControls.update();
-                    } else if (cameraModeRef.current.isThirdPerson && localPlayer.mesh) {
-                        // Third-person camera logic
-                        tempCameraPos.copy(thirdPersonOffset);
-                        tempCameraPos.applyQuaternion(localPlayer.mesh.quaternion);
-                        tempCameraPos.add(localPlayer.mesh.position);
-                        camera.position.lerp(tempCameraPos, 0.1);
-                        tempLookAt.copy(localPlayer.mesh.position).add(new THREE.Vector3(0, 1.0, 0));
-                        camera.lookAt(tempLookAt);
-                    } else {
-                        // First-person camera logic
-                        if (localState && localState.position) {
-                            camera.position.set(
-                                localState.position.x,
-                                localState.position.y + 1.7,
-                                localState.position.z
-                            );
+                    // ONLY update camera based on game state if Orbital mode is OFF
+                    if (!cameraModeRef.current.isOrbital) {
+                        if (cameraModeRef.current.isThirdPerson && localPlayerRef.current.mesh) {
+                            // Third-person camera logic
+                            tempCameraPos.copy(thirdPersonOffset);
+                            tempCameraPos.applyQuaternion(localPlayerRef.current.mesh.quaternion);
+                            tempCameraPos.add(localPlayerRef.current.mesh.position);
+                            cameraRef.current.position.lerp(tempCameraPos, 0.1);
+                            tempLookAt.copy(localPlayerRef.current.mesh.position).add(new THREE.Vector3(0, 1.0, 0));
+                            cameraRef.current.lookAt(tempLookAt);
+                        } else {
+                            // First-person camera logic (Look handled by mousemove, position follows predicted body)
+                             if (localPlayerRef.current.rapierBody) {
+                                 const predictedPos = localPlayerRef.current.rapierBody.translation();
+                                cameraRef.current.position.set(
+                                    predictedPos.x,
+                                    predictedPos.y + 1.6, // FPV camera height offset
+                                    predictedPos.z
+                                );
+                             } else if (localState && localState.position) {
+                                 // Fallback if body not ready
+                                cameraRef.current.position.set(
+                                    localState.position.x,
+                                    localState.position.y + 1.6,
+                                    localState.position.z
+                                );
+                            }
+                             // Note: First-person camera rotation is directly handled by handleMouseMove
                         }
+                    } else {
+                        // Orbital mode is active - DO NOTHING here, let DebugControls handle it.
                     }
 
                     // Render Scene
-                    if (renderer && scene && camera) {
+                    if (rendererRef.current && sceneRef.current && cameraRef.current) {
                         // >>> MODIFIED: Only one render call needed <<<
-                        renderer.render(scene, camera);
-
-                        // >>> REMOVED redundant/incorrect FPV render pass <<<
-                        // if (fpvElements.camera) {
-                        //     renderer.autoClear = false;
-                        //     renderer.clearDepth();
-                        //     renderer.render(scene, fpvElements.camera); // REMOVED
-                        //     renderer.autoClear = true;
-                        // }
+                        rendererRef.current.render(sceneRef.current, cameraRef.current);
                     }
 
-                    // >>> NEW: Render Physics Debug Wireframes <<<
-                    if (rapierWorld && linesRef.current) {
-                         // >> MODIFIED: Only show debug lines when orbital camera is active <<
-                         linesRef.current.visible = cameraModeRef.current.isOrbital;
-                         if (linesRef.current.visible) {
-                             const buffers = rapierWorld.debugRender();
-                             linesRef.current.geometry.setAttribute('position', new THREE.BufferAttribute(buffers.vertices, 3));
-                             linesRef.current.geometry.setAttribute('color', new THREE.BufferAttribute(buffers.colors, 4));
-                         }
-                    }
-
-                    if (!localPlayer.mesh) {
+                    if (!localPlayerRef.current.mesh) {
                         console.warn('[DEBUG] localPlayer.mesh is missing!');
                     }
-                    if (!localPlayer.rapierBody) {
+                    if (!localPlayerRef.current.rapierBody) {
                         console.warn('[DEBUG] localPlayer.rapierBody is missing!');
                     }
                     if (!localState) {
@@ -847,26 +868,25 @@ function GameViewFPS({
                     } else if (localState.state !== 'alive') {
                         console.log(`[DEBUG] localState is not 'alive' (state: ${localState.state}), prediction/input might be ignored.`);
                     }
-                    if (localPlayer.mesh && localPlayer.rapierBody) {
-                        console.log(`[DEBUG] Mesh position: (${localPlayer.mesh.position.x}, ${localPlayer.mesh.position.y}, ${localPlayer.mesh.position.z})`);
-                        console.log(`[DEBUG] Camera position: (${camera.position.x}, ${camera.position.y}, ${camera.position.z})`);
+                    if (localPlayerRef.current.mesh && localPlayerRef.current.rapierBody) {
+                        console.log(`[DEBUG] Mesh position: (${localPlayerRef.current.mesh.position.x}, ${localPlayerRef.current.mesh.position.y}, ${localPlayerRef.current.mesh.position.z})`);
+                        console.log(`[DEBUG] Camera position: (${cameraRef.current.position.x}, ${cameraRef.current.position.y}, ${cameraRef.current.position.z})`);
                     }
                 };
                 console.log("Starting render loop...");
-                renderLoopId = requestAnimationFrame(render); // Start the loop
+                renderLoopIdRef.current = requestAnimationFrame(render); // Use ref
 
                 // --- Socket.IO Connection --- (Refined Retry Logic)
-                const connectToServer = () => { // <<< NOTE: Consider creating player body client-side here too for prediction
-                    // Example: Create client-side player body after rapier init
-                    // This body will be driven by prediction and corrected by server state.
-                    if (rapierWorld && !localPlayer.rapierBody) {
+                const connectToServer = () => {
+                    // Use ref
+                    if (rapierWorldRef.current && !localPlayerRef.current.rapierBody) {
                        console.log("Creating CLIENT-SIDE Rapier body for prediction...");
                        // Use placeholder initial position, server state will correct it
                        const initialClientPos = {x:0, y:1, z:0};
                        const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
                          .setTranslation(initialClientPos.x, initialClientPos.y, initialClientPos.z)
                          .setCanSleep(false).setCcdEnabled(true); // Removed .lockRotations()
-                       const body = rapierWorld.createRigidBody(bodyDesc);
+                       const body = rapierWorldRef.current.createRigidBody(bodyDesc);
                        const playerHeight = 1.8; const playerRadius = 0.4;
                        const colliderDesc = RAPIER.ColliderDesc.capsule(playerHeight / 2 - playerRadius, playerRadius);
                        // Apply properties after creation
@@ -881,9 +901,10 @@ function GameViewFPS({
                        // Set active events AFTER setting groups
                        colliderDesc.setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
 
-                       const collider = rapierWorld.createCollider(colliderDesc, body);
+                       // Use rapierWorldRef
+                       const collider = rapierWorldRef.current.createCollider(colliderDesc, body);
                        collider.userData = { type: 'playerBody', playerId: localPlayerUserId }; // Set userData on the created collider
-                       localPlayer.rapierBody = body;
+                       localPlayerRef.current.rapierBody = body;
                        console.log("Client-side Rapier body created.");
                     }
 
@@ -923,7 +944,7 @@ function GameViewFPS({
                             const serverPlayerState = gameState.players?.[localPlayerUserId];
 
                             // Apply reconciliation if server state received
-                            if (serverPlayerState && serverPlayerState.lastProcessedSequence !== undefined && localPlayer.rapierBody) {
+                            if (serverPlayerState && serverPlayerState.lastProcessedSequence !== undefined && localPlayerRef.current.rapierBody) {
                                 const lastProcessedSequence = serverPlayerState.lastProcessedSequence;
 
                                 // Remove acknowledged inputs from pending buffer
@@ -932,27 +953,27 @@ function GameViewFPS({
                                 );
 
                                 // Reset client physics state to authoritative server state
-                                localPlayer.rapierBody.setTranslation(serverPlayerState.position, true);
-                                localPlayer.rapierBody.setRotation(serverPlayerState.rotation, true);
-                                localPlayer.rapierBody.setLinvel(serverPlayerState.velocity, true);
-                                localPlayer.rapierBody.setAngvel({ x: 0, y: 0, z: 0 }, true); // Reset angular velocity too
+                                localPlayerRef.current.rapierBody.setTranslation(serverPlayerState.position, true);
+                                localPlayerRef.current.rapierBody.setRotation(serverPlayerState.rotation, true);
+                                localPlayerRef.current.rapierBody.setLinvel(serverPlayerState.velocity, true);
+                                localPlayerRef.current.rapierBody.setAngvel({ x: 0, y: 0, z: 0 }, true); // Reset angular velocity too
 
                                 // Re-apply pending (unacknowledged) inputs on top of server state
                                 inputStateRef.current.pendingInputs.forEach(input => {
                                     // Use the same physics application function
-                                    applyInputPhysics(localPlayer.rapierBody, input.keys, input.lookQuat, input.deltaTime);
+                                    applyInputPhysics(localPlayerRef.current.rapierBody, input.keys, input.lookQuat, input.deltaTime);
                                     // Optionally, re-step the physics world for each pending input?
-                                    // rapierWorld?.step(); // This might be too expensive
+                                    // rapierWorldRef.current?.step(); // This might be too expensive
                                 });
                                 // After re-applying inputs, the rapierBody is now the corrected predicted state
 
-                            } else if (serverPlayerState && localPlayer.rapierBody) {
+                            } else if (serverPlayerState && localPlayerRef.current.rapierBody) {
                                 // No sequence number? Maybe initial state or server doesn't support reconciliation fully yet.
                                 // Just hard-set state without replaying inputs for now.
-                                localPlayer.rapierBody.setTranslation(serverPlayerState.position, true);
-                                localPlayer.rapierBody.setRotation(serverPlayerState.rotation, true);
-                                localPlayer.rapierBody.setLinvel(serverPlayerState.velocity, true);
-                                localPlayer.rapierBody.setAngvel({ x: 0, y: 0, z: 0 }, true);
+                                localPlayerRef.current.rapierBody.setTranslation(serverPlayerState.position, true);
+                                localPlayerRef.current.rapierBody.setRotation(serverPlayerState.rotation, true);
+                                localPlayerRef.current.rapierBody.setLinvel(serverPlayerState.velocity, true);
+                                localPlayerRef.current.rapierBody.setAngvel({ x: 0, y: 0, z: 0 }, true);
                             }
 
                             // Always update the overall game state for rendering remote players, HUD, etc.
@@ -1034,7 +1055,7 @@ function GameViewFPS({
             }
 
             // Cancel render loop
-            if(renderLoopId) cancelAnimationFrame(renderLoopId);
+            if(renderLoopIdRef.current) cancelAnimationFrame(renderLoopIdRef.current);
 
             // >>> NEW: Remove Input Listeners <<<
             document.removeEventListener('keydown', handleKeyDown);
@@ -1046,8 +1067,8 @@ function GameViewFPS({
             }
 
             // Dispose Three.js resources
-            if (renderer) {
-                 scene?.traverse(object => {
+            if (rendererRef.current) {
+                 sceneRef.current?.traverse(object => {
                       if (object.geometry) object.geometry.dispose();
                       if (object.material) {
                          if (Array.isArray(object.material)) {
@@ -1058,7 +1079,7 @@ function GameViewFPS({
                       }
                  });
                  // Dispose FPV elements (assuming models added to fpvElements.camera)
-                 fpvElements?.camera?.traverse(object => { // Traverse the FPV camera children
+                 fpvElementsRef.current?.camera?.traverse(object => { // Traverse the FPV camera children
                      if (object.geometry) object.geometry.dispose();
                       if (object.material) {
                          if (Array.isArray(object.material)) {
@@ -1068,12 +1089,9 @@ function GameViewFPS({
                          }
                       }
                  });
-                renderer.dispose();
+                rendererRef.current.dispose();
             }
-            if (orbitControls) {
-                orbitControls.dispose();
-                orbitControls = null; // Important to prevent memory leaks
-            }
+            // OrbitControls disposal removed, handled by DebugControls
             console.log("Client Cleanup Complete.");
         };
     }, [serverIp, serverPort, matchId, mapId, localPlayerCharacterId, opponentPlayerCharacterId, localPlayerUserId]); // Essential props that trigger re-init
@@ -1086,6 +1104,15 @@ function GameViewFPS({
             {/* TODO: Add HUD elements driven by currentGameState */}
 
             <canvas ref={canvasRef} style={{ display: 'block', width: '100%', height: '100%' }} />
+
+            {/* Conditionally render DebugControls */}
+            <DebugControls
+                isEnabled={isDebugModeEnabled}
+                camera={cameraRef.current}
+                renderer={rendererRef.current}
+                scene={sceneRef.current}
+                rapierWorld={rapierWorldRef.current}
+            />
 
             {/* Potential UI Overlays */}
         </div>
