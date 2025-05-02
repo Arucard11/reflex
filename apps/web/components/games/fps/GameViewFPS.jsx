@@ -18,6 +18,7 @@ import {
     CollisionGroup,
     interactionGroups
 } from '@shared-types/game-fps';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
 
 // Define props based on Universal Standard (II.1)
 function GameViewFPS({
@@ -40,16 +41,16 @@ function GameViewFPS({
     // NEW: Ref for current animation state - Separate refs for player and FPV
     const currentPlayerActionRef = useRef(null);
     const currentFpvActionRef = useRef(null); // Ref for currently playing FPV animation
+    const linesRef = useRef(null); // <-- Move this here
 
     // State for loading/connection status
     const [isLoading, setIsLoading] = useState(true);
     // Provide more detailed statuses
     const [connectionStatus, setConnectionStatus] = useState('disconnected'); // 'connecting', 'connected', 'error', 'retrying', 'disconnected'
     const [retryAttempt, setRetryAttempt] = useState(0); // Track retry attempts
-    // NEW: State for camera view mode (Plan 2.1.3)
-    const [isThirdPersonView, setIsThirdPersonView] = useState(true); // DEBUG: Force 3rd person
     // NEW: Add state to hold the merged game state received from server (Plan 1.1.2)
-    const [currentGameState, setCurrentGameState] = useState(null);
+    const gameStateRef = useRef(null);
+    const [gameStateVersion, setGameStateVersion] = useState(0); // Only for UI updates
 
     // Max retries
     const MAX_RETRIES = 5;
@@ -63,6 +64,12 @@ function GameViewFPS({
     });
     const lastInputSendTimeRef = useRef(0);
     const INPUT_SEND_INTERVAL = 1000 / 30; // Send input ~30 times/sec
+
+    // Use the existing cameraModeRef for all camera state:
+    const cameraModeRef = useRef({
+        isThirdPerson: true,
+        isOrbital: false
+    });
 
     // >>> NEW: Function to apply physics based on input <<< (Used by prediction & reconciliation)
     const applyInputPhysics = useCallback((playerBody, inputKeys, inputLookQuat, physicsDeltaTime) => {
@@ -155,8 +162,6 @@ function GameViewFPS({
         let localPlayer = { mesh: null, rapierBody: null, mixer: null };
         let remotePlayer = { mesh: null, mixer: null };
         let physicsDebugRenderer = null; // <<< NEW: Ref for debug renderer
-        // >>> NEW: Declare lines in the outer scope <<< 
-        let lines = null;
         // MODIFIED: Updated fpvElements structure
         let fpvElements = {
             camera: null,
@@ -184,6 +189,13 @@ function GameViewFPS({
                 // NEW: Toggle Camera Key
                 case 'KeyC': inputStateRef.current.keys.C = true; break;
                 // Add other keys later (Ability, Grenade, Reload, etc.)
+                case 'KeyB': // B key for debug camera
+                    cameraModeRef.current.isOrbital = !cameraModeRef.current.isOrbital;
+                    if (cameraModeRef.current.isOrbital) {
+                        console.log('Enabling orbital debug camera');
+                        document.exitPointerLock();
+                    }
+                    break;
             }
         };
         const handleKeyUp = (event) => {
@@ -203,11 +215,7 @@ function GameViewFPS({
                 // NEW: Toggle Camera Key Release
                 case 'KeyC':
                     if (inputStateRef.current.keys.C) {
-                        setIsThirdPersonView(prev => {
-                            const newVal = !prev;
-                            console.log(`[DEBUG] Camera mode toggled. isThirdPersonView now: ${newVal}`);
-                            return newVal;
-                        });
+                        cameraModeRef.current.isThirdPerson = !cameraModeRef.current.isThirdPerson;
                     }
                     inputStateRef.current.keys.C = false; break;
                 // Add other keys later
@@ -461,11 +469,11 @@ function GameViewFPS({
                 console.log('Client Rapier World created.'); // Log progress
 
                 // >>> NEW: Move debug lines creation here, assign to outer scope variable <<<
-                lines = new THREE.LineSegments(
+                linesRef.current = new THREE.LineSegments(
                     new THREE.BufferGeometry(),
                     new THREE.LineBasicMaterial({ color: 0xffffff, vertexColors: true })
                 );
-                scene.add(lines);
+                scene.add(linesRef.current);
 
                 // --- Load Map Physics (Client - Mirroring server 1.2.2) ---
                 console.log(`Loading Client Physics for Map ID: ${mapId}...`);
@@ -611,6 +619,8 @@ function GameViewFPS({
                 const tempCameraPos = new THREE.Vector3();
                 const tempLookAt = new THREE.Vector3();
 
+                let orbitControls = null;
+
                 const render = (timestamp) => {
                     if (!isMounted) return;
                     renderLoopId = requestAnimationFrame(render);
@@ -620,7 +630,7 @@ function GameViewFPS({
                     lastTimestamp = timestamp;
 
                     // Get Local Player State
-                    const localState = currentGameState?.players?.[localPlayerUserId];
+                    const localState = gameStateRef.current?.players?.[localPlayerUserId];
 
                     // >>> NEW: Send Input State Periodically <<<
                     const now = performance.now();
@@ -697,18 +707,24 @@ function GameViewFPS({
                     }
 
                     // --- Update FPV Weapon Visibility ---
+                    // >> NEW: Control overall FPV camera visibility first <<
+                    const isFirstPerson = !cameraModeRef.current.isThirdPerson && !cameraModeRef.current.isOrbital;
+                    if (fpvElements.camera) {
+                        fpvElements.camera.visible = isFirstPerson;
+                    }
+                    // >> END NEW <<
+
+                    // Keep this logic: Only make the *active* weapon model visible *when* FPV is active
                     for (const weaponId in fpvElements.weaponModels) {
                         const weaponData = fpvElements.weaponModels[weaponId];
                         if (weaponData?.model) {
-                            // Show only the active weapon model
-                            weaponData.model.visible = (weaponId === activeWeaponId);
-                            // Removed per-frame FPV weapon position log for performance
+                            weaponData.model.visible = isFirstPerson && (weaponId === activeWeaponId);
                         }
                     }
 
                     // --- Update Player Mesh Visibility & Position (Placeholder) ---
                     if (localPlayer.mesh) {
-                        localPlayer.mesh.visible = isThirdPersonView;
+                        localPlayer.mesh.visible = cameraModeRef.current.isThirdPerson;
                         // NEW: Update mesh from predicted Rapier body state
                         if (localPlayer.rapierBody) {
                             // Define capsule dimensions (must match server/client creation)
@@ -726,7 +742,7 @@ function GameViewFPS({
                             // >>> ADDED LOG <<<
                             console.log(`[Predict] Syncing Mesh: Mesh Pos=(${localPlayer.mesh.position.x.toFixed(2)}, ${localPlayer.mesh.position.y.toFixed(2)}, ${localPlayer.mesh.position.z.toFixed(2)})`);
                             // Don't directly set mesh rotation from body if using third person lookAt
-                            if (!isThirdPersonView) {
+                            if (!cameraModeRef.current.isThirdPerson) {
                                 // In first person, mesh (usually hidden) should match body rotation
                                 localPlayer.mesh.quaternion.set(predictedRot.x, predictedRot.y, predictedRot.z, predictedRot.w);
                             }
@@ -737,7 +753,7 @@ function GameViewFPS({
                         }
                     }
                     if (remotePlayer.mesh) {
-                         const remoteState = currentGameState?.players?.[opponentPlayerId];
+                         const remoteState = gameStateRef.current?.players?.[opponentPlayerId];
                          if (remoteState && remoteState.position && remoteState.rotation) {
                             remotePlayer.mesh.visible = true; // Show remote player always
                             remotePlayer.mesh.position.lerp(remoteState.position, 0.3);
@@ -747,60 +763,77 @@ function GameViewFPS({
                          }
                     }
 
+                    // --- Camera Controls Setup ---
+                    if (cameraModeRef.current.isOrbital) {
+                        if (!orbitControls && camera && renderer?.domElement) {
+                            // Add null check for camera and renderer.domElement
+                            if (!document.body.contains(renderer.domElement)) {
+                                console.error('Renderer DOM element not attached to document');
+                                return;
+                            }
+                            
+                            // Verify camera has valid matrix
+                            camera.updateMatrixWorld();
+                            orbitControls = new OrbitControls(camera, renderer.domElement);
+                            orbitControls.enableDamping = true;
+                            orbitControls.dampingFactor = 0.05;
+                            orbitControls.screenSpacePanning = true;
+                            orbitControls.minDistance = 1;
+                            orbitControls.maxDistance = 50;
+                            
+                            // Force initial update
+                            orbitControls.update();
+                        }
+                    } else if (orbitControls) {
+                        orbitControls.dispose();
+                        orbitControls = null;
+                    }
+
                     // --- Update Camera Position ---
-                    if (isThirdPersonView && localPlayer.mesh) {
+                    if (orbitControls) {
+                        orbitControls.update();
+                    } else if (cameraModeRef.current.isThirdPerson && localPlayer.mesh) {
+                        // Third-person camera logic
                         tempCameraPos.copy(thirdPersonOffset);
                         tempCameraPos.applyQuaternion(localPlayer.mesh.quaternion);
                         tempCameraPos.add(localPlayer.mesh.position);
-                        // TODO: Camera collision check
                         camera.position.lerp(tempCameraPos, 0.1);
                         tempLookAt.copy(localPlayer.mesh.position).add(new THREE.Vector3(0, 1.0, 0));
                         camera.lookAt(tempLookAt);
                     } else {
-                        // First Person: Camera rotation driven by mouse. Position follows player state.
+                        // First-person camera logic
                         if (localState && localState.position) {
-                             // Directly set camera position based on player state + eye height offset
-                             camera.position.set(localState.position.x, localState.position.y + 1.7, localState.position.z);
+                            camera.position.set(
+                                localState.position.x,
+                                localState.position.y + 1.7,
+                                localState.position.z
+                            );
                         }
                     }
 
                     // Render Scene
                     if (renderer && scene && camera) {
+                        // >>> MODIFIED: Only one render call needed <<<
                         renderer.render(scene, camera);
 
-                        // >>> NEW: Re-added separate render pass for FPV <<< (Plan 2.1.2)
-                         if (fpvElements.camera) {
-                             renderer.autoClear = false; // Prevent clearing main scene render
-                             renderer.clearDepth(); // Clear depth buffer only
-                             renderer.render(scene, fpvElements.camera); // Render main scene FROM FPV camera POV? (Check this) - Or render separate FPV scene?
-                             // Let's assume we want to render fpvElements attached to main camera overlayed:
-                             // renderer.render(cameraGroupWithFPV, camera); // Need to ensure camera group setup
-                             // OR if fpv elements are in main scene, render main scene with FPV camera
-                              renderer.render(scene, fpvElements.camera);
-
-                              // Most likely: Render main scene with main camera, then overlay FPV elements
-                              // renderer.render(scene, camera); // Already done above
-                              // renderer.clearDepth();
-                              // fpvElements.camera.position.copy(camera.position); // Ensure FPV cam matches main cam
-                              // fpvElements.camera.quaternion.copy(camera.quaternion);
-                              // // Need a separate scene for FPV elements if doing true overlay
-                              // renderer.render(fpvScene, fpvElements.camera);
-
-                              // Let's try the simplest approach first: Render scene with main camera, then clear depth and render scene again with FPV camera
-                              // This relies on FPV elements being correctly positioned relative to FPV cam, and FPV cam relative to main cam.
-                             renderer.autoClear = true; // Restore auto clear
-                         }
+                        // >>> REMOVED redundant/incorrect FPV render pass <<<
+                        // if (fpvElements.camera) {
+                        //     renderer.autoClear = false;
+                        //     renderer.clearDepth();
+                        //     renderer.render(scene, fpvElements.camera); // REMOVED
+                        //     renderer.autoClear = true;
+                        // }
                     }
 
                     // >>> NEW: Render Physics Debug Wireframes <<<
-                    if (rapierWorld && lines) {
-                         lines.visible = true; // Ensure debug lines are visible
-                         const buffers = rapierWorld.debugRender();
-                         lines.geometry.setAttribute('position', new THREE.BufferAttribute(buffers.vertices, 3));
-                         lines.geometry.setAttribute('color', new THREE.BufferAttribute(buffers.colors, 4));
-                         // Render the debug lines using the main camera
-                         // NO NEED TO CALL RENDER HERE - it happens once at the end of the loop
-                         // renderer.render(lines, camera);
+                    if (rapierWorld && linesRef.current) {
+                         // >> MODIFIED: Only show debug lines when orbital camera is active <<
+                         linesRef.current.visible = cameraModeRef.current.isOrbital;
+                         if (linesRef.current.visible) {
+                             const buffers = rapierWorld.debugRender();
+                             linesRef.current.geometry.setAttribute('position', new THREE.BufferAttribute(buffers.vertices, 3));
+                             linesRef.current.geometry.setAttribute('color', new THREE.BufferAttribute(buffers.colors, 4));
+                         }
                     }
 
                     if (!localPlayer.mesh) {
@@ -809,8 +842,10 @@ function GameViewFPS({
                     if (!localPlayer.rapierBody) {
                         console.warn('[DEBUG] localPlayer.rapierBody is missing!');
                     }
-                    if (!localState || localState.state !== 'alive') {
-                        console.warn('[DEBUG] localState is missing or not alive:', localState);
+                    if (!localState) {
+                        console.warn('[DEBUG] localState is missing!');
+                    } else if (localState.state !== 'alive') {
+                        console.log(`[DEBUG] localState is not 'alive' (state: ${localState.state}), prediction/input might be ignored.`);
                     }
                     if (localPlayer.mesh && localPlayer.rapierBody) {
                         console.log(`[DEBUG] Mesh position: (${localPlayer.mesh.position.x}, ${localPlayer.mesh.position.y}, ${localPlayer.mesh.position.z})`);
@@ -921,7 +956,8 @@ function GameViewFPS({
                             }
 
                             // Always update the overall game state for rendering remote players, HUD, etc.
-                            setCurrentGameState(prevState => ({ ...(prevState || {}), ...gameState }));
+                            gameStateRef.current = gameState;
+                            setGameStateVersion(v => v + 1); // Trigger UI updates if needed
                         });
                         // Add other listeners...
 
@@ -929,7 +965,7 @@ function GameViewFPS({
                             if (!isMounted) return;
                             console.log('Disconnected. Reason:', reason);
                             socketRef.current = null;
-                            setCurrentGameState(null);
+                            gameStateRef.current = null;
                             setConnectionStatus('disconnected'); // Set to disconnected first
                             // If disconnect wasn't manual and retries left, schedule retry
                             if (reason !== 'io client disconnect' && retryAttempt < MAX_RETRIES) {
@@ -1033,6 +1069,10 @@ function GameViewFPS({
                       }
                  });
                 renderer.dispose();
+            }
+            if (orbitControls) {
+                orbitControls.dispose();
+                orbitControls = null; // Important to prevent memory leaks
             }
             console.log("Client Cleanup Complete.");
         };

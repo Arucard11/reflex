@@ -210,7 +210,7 @@ function loadMapPhysics(mapId) {
     if (!mapConfig) {
         throw new Error(`Map config not found for mapId: ${mapId}`);
     }
-    console.log("Using Map Config:", JSON.stringify(mapConfig, null, 2)); // Log the full config
+   
 
     const physicsData = mapConfig.physicsData;
     if (!physicsData) {
