@@ -66,15 +66,15 @@ function GameViewFPS({
     // Max retries
     const MAX_RETRIES = 5;
 
-    // >>> NEW: Ref for Input State <<< Plan 2.2.1 / 2.2.2
+    // --- Input State Management ---
     const inputStateRef = useRef({
-        keys: { W: false, A: false, S: false, D: false, Space: false, Shift: false, /* NEW Action Keys */ C: false, Ability1: false, GrenadeFrag: false, GrenadeSemtex: false, GrenadeFlash: false, Reload: false, Interact: false, GrappleFire: false, WeaponSwitch: false },
+        keys: { W: false, A: false, S: false, D: false, Space: false, Shift: false, Ability1: false, GrenadeFrag: false, GrenadeSemtex: false, GrenadeFlash: false, Reload: false, Interact: false, GrappleFire: false, WeaponSwitch: false },
         lookQuat: { x: 0, y: 0, z: 0, w: 1 },
-        sequence: 0, // Input sequence number
-        pendingInputs: [], // Store inputs applied client-side but not yet ack'd by server
+        sequence: 0,
+        pendingInputs: [],
     });
     const lastInputSendTimeRef = useRef(0);
-    const INPUT_SEND_INTERVAL = 1000 / 30; // Send input ~30 times/sec
+    const INPUT_SEND_INTERVAL = 1000 / 30;
 
     // Use the existing cameraModeRef for all camera state:
     const cameraModeRef = useRef({
@@ -82,75 +82,54 @@ function GameViewFPS({
         isOrbital: false
     });
 
-    // >>> NEW: Function to apply physics based on input <<< (Used by prediction & reconciliation)
+
+
+    // --- Client-Side Prediction & Movement Engine ---
     const applyInputPhysics = useCallback((playerBody, inputKeys, inputLookQuat, physicsDeltaTime) => {
         if (!playerBody || physicsDeltaTime <= 0) return;
-
-        // Constants should ideally match server
         const walkSpeed = 5.0;
         const runSpeed = 8.0;
         const jumpImpulse = 7.0;
-        const accelerationForce = 2000.0; // Force applied per second
-        const maxAccelForce = 50.0; // Max force per tick (scaled by deltaTime)
+        const accelerationForce = 2000.0;
+        const maxAccelForce = 50.0;
         const airControlFactor = 0.2;
-
         let desiredVelocity = new THREE.Vector3(0, 0, 0);
         let moveDirection = new THREE.Vector3(0, 0, 0);
         let isMoving = false;
-
-        // Use the provided lookQuat for direction calculation
         const _lookQuat = new THREE.Quaternion(inputLookQuat.x, inputLookQuat.y, inputLookQuat.z, inputLookQuat.w);
         const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(_lookQuat);
         const right = new THREE.Vector3(1, 0, 0).applyQuaternion(_lookQuat);
-        forward.y = 0; // Project onto ground plane
-        right.y = 0;
-        forward.normalize();
-        right.normalize();
-
+        forward.y = 0; right.y = 0; forward.normalize(); right.normalize();
         if (inputKeys.W) { moveDirection.add(forward); isMoving = true; }
         if (inputKeys.S) { moveDirection.sub(forward); isMoving = true; }
         if (inputKeys.A) { moveDirection.sub(right); isMoving = true; }
         if (inputKeys.D) { moveDirection.add(right); isMoving = true; }
-
         if (isMoving) {
             moveDirection.normalize();
             const targetSpeed = inputKeys.Shift ? runSpeed : walkSpeed;
             desiredVelocity.x = moveDirection.x * targetSpeed;
             desiredVelocity.z = moveDirection.z * targetSpeed;
         }
-
-        // Apply force based on velocity difference
         const currentLinvel = playerBody.linvel();
         let force = new THREE.Vector3(0, 0, 0);
         const velocityDiffX = desiredVelocity.x - currentLinvel.x;
         const velocityDiffZ = desiredVelocity.z - currentLinvel.z;
-
         force.x = velocityDiffX * accelerationForce * physicsDeltaTime;
         force.z = velocityDiffZ * accelerationForce * physicsDeltaTime;
-
         // TODO: Air control factor application needs ground check state
-        // const isOnGround = true; // Placeholder - get from Rapier contacts or server state
-        // if (!isOnGround) {
-        //     force.x *= airControlFactor;
-        //     force.z *= airControlFactor;
-        // }
-
-        // Clamp force
-        const forceMagnitude = force.length(); // Use THREE.Vector3 length
-        if (forceMagnitude > maxAccelForce) {
-            force.multiplyScalar(maxAccelForce / forceMagnitude);
-        }
+        // const isOnGround = true; // Placeholder
+        // if (!isOnGround) { force.x *= airControlFactor; force.z *= airControlFactor; }
+        const forceMagnitude = force.length();
+        if (forceMagnitude > maxAccelForce) force.multiplyScalar(maxAccelForce / forceMagnitude);
         playerBody.applyImpulse({ x: force.x, y: 0, z: force.z }, true);
-
         // Jumping
-        // TODO: Needs reliable client-side ground check
-        const isOnGround = true; // Placeholder
-        if (inputKeys.Space && isOnGround /* && !wasJumpingLastFrame */) {
+        // const isOnGround = true; // Placeholder
+        if (inputKeys.Space /* && isOnGround */) {
             playerBody.applyImpulse({ x: 0, y: jumpImpulse, z: 0 }, true);
-            // TODO: Prevent spamming jump impulse
         }
-
-    }, []); // Empty dependency array as it uses constants and args
+        // Grapple Gun Physics (if active) -- placeholder for client prediction
+        // ...
+    }, []);
 
     // Effect for initialization and cleanup
     useEffect(() => {
@@ -345,7 +324,7 @@ function GameViewFPS({
 
                 // --- Asset Loaders ---
                 const loader = new GLTFLoader();
-                const textureLoader = new THREE.TextureLoader(); // For potential texture variations
+                
                 console.log("Loaders created."); // Log progress
 
                 // --- Three.js Core Setup ---
@@ -516,7 +495,7 @@ function GameViewFPS({
                     const clientPhysicsData = clientMapConfig.physicsData;
                     console.log("Client: Found Physics Data:", JSON.stringify(clientPhysicsData, null, 2)); // Log physics data
 
-                    // --- Prioritize Trimesh Loading --- (NEW)
+                    // --- Only support Trimesh Loading ---
                     if (clientPhysicsData.vertices && clientPhysicsData.vertices.length > 0 && clientPhysicsData.indices && clientPhysicsData.indices.length > 0) {
                         console.log(`[Client Physics Load] Attempting to load TR MESH...`);
                         try {
@@ -524,7 +503,6 @@ function GameViewFPS({
                             const body = rapierWorldRef.current.createRigidBody(rigidBodyDesc);
                             const trimeshDesc = RAPIER.ColliderDesc.trimesh(clientPhysicsData.vertices, clientPhysicsData.indices);
                             console.log(`[Client Physics Load] TrimeshDesc created.`);
-
                             // IMPORTANT: Set Collision Groups - MUST MATCH SERVER
                             const groups = interactionGroups(
                                 CollisionGroup.WORLD,
@@ -532,67 +510,18 @@ function GameViewFPS({
                             );
                             trimeshDesc.setCollisionGroups(groups);
                             console.log(`[Client Physics Load] Trimesh Set collision groups to:`, groups);
-
                             // Use rapierWorldRef
                             const collider = rapierWorldRef.current.createCollider(trimeshDesc, body);
                             console.log(`[Client Physics Load] SUCCESS: Created client trimesh map collider handle: ${collider.handle}`);
                         } catch (error) {
                             console.error(`[Client Physics Load] ERROR: Failed to create client trimesh collider for map ${mapId}:`, error);
-                            console.warn(`[Client Physics Load] Falling back to primitive colliders if available...`);
-                            loadClientPrimitiveColliders(clientPhysicsData, mapId); // Call helper as fallback
+                            // No fallback to primitives
                         }
                     } else {
-                         console.log(`[Client Physics Load] No valid trimesh data found. Checking for primitive colliders...`);
-                         loadClientPrimitiveColliders(clientPhysicsData, mapId); // Call helper if no trimesh
+                        console.error(`[Client Physics Load] No valid trimesh data found for map ${mapId}. Physics loading failed.`);
                     }
                 }
-                console.log('Client Map Physics Loading Attempt Complete.'); // Log progress
-
-                // Helper function for loading client primitive colliders (NEW)
-                function loadClientPrimitiveColliders(physicsData, mapId) {
-                     if (physicsData.colliders && physicsData.colliders.length > 0) {
-                        console.log(`[Client Physics Load - Primitives] Processing ${physicsData.colliders.length} primitive colliders...`);
-                        physicsData.colliders.forEach((colliderData, index) => {
-                            console.log(`[Client Collider ${index}] Data:`, JSON.stringify(colliderData));
-                            let colliderDesc;
-                            let rigidBodyDesc = RAPIER.RigidBodyDesc.fixed();
-
-                            if (colliderData.position) {
-                                rigidBodyDesc.setTranslation(colliderData.position.x, colliderData.position.y, colliderData.position.z);
-                            }
-                            // TODO: Set rotation if provided
-
-                            if (colliderData.type === 'cuboid') {
-                                if (!colliderData.dimensions) { console.warn(`[Client Collider ${index}] Cuboid missing dimensions`); return; }
-                                colliderDesc = RAPIER.ColliderDesc.cuboid(colliderData.dimensions.x / 2, colliderData.dimensions.y / 2, colliderData.dimensions.z / 2);
-                            } // Add other types if needed
-                            else {
-                                console.warn(`[Client Collider ${index}] Unsupported collider type: ${colliderData.type}`);
-                                return;
-                            }
-
-                            if (colliderDesc) {
-                                console.log(`[Client Collider ${index}] ColliderDesc created.`);
-                                // IMPORTANT: Ensure client sets collision groups identically to server!
-                                const groups = interactionGroups(
-                                    CollisionGroup.WORLD,
-                                    [CollisionGroup.PLAYER_BODY, CollisionGroup.GRENADE, CollisionGroup.PROJECTILE]
-                                );
-                                colliderDesc.setCollisionGroups(groups); // <<< ADDED MISSING CALL
-                                console.log(`[Client Collider ${index}] Set collision groups to:`, groups);
-
-                                // Use rapierWorldRef
-                                const body = rapierWorldRef.current.createRigidBody(rigidBodyDesc);
-                                const collider = rapierWorldRef.current.createCollider(colliderDesc, body);
-                                console.log(`[Client Collider ${index}] Created map collider handle: ${collider.handle} attached to body handle: ${body.handle}`);
-                            } else {
-                                console.warn(`[Client Collider ${index}] Failed to create ColliderDesc.`);
-                            }
-                        });
-                    } else {
-                        console.log("Client: No primitive colliders defined in physicsData.");
-                    }
-                 }
+                console.log('Client Map Physics Loading Attempt Complete.');
 
                 // --- Resize Handling ---
                 const handleResize = () => {

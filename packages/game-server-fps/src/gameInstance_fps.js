@@ -195,9 +195,11 @@ function createPlayerPhysicsBody(playerId, position) {
             [CollisionGroup.WORLD, CollisionGroup.PLAYER_BODY, CollisionGroup.GRENADE] // Collides with World, other Players, Grenades
         ))
         .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS); // Needed for ground detection
-    colliderDesc.setUserData({ type: 'playerBody', playerId: playerId });
-
-    rapierWorld.createCollider(colliderDesc, body); // Attach collider to body
+    // Set user data on the collider after creation
+    const collider = rapierWorld.createCollider(colliderDesc, body);
+    if (collider) {
+        collider.setUserData({ type: 'playerBody', playerId: playerId });
+    }
 
     console.log(`Physics body created for ${playerId} with handle: ${body.handle}`);
     return body; // Return the created body
@@ -210,8 +212,6 @@ function loadMapPhysics(mapId) {
     if (!mapConfig) {
         throw new Error(`Map config not found for mapId: ${mapId}`);
     }
-   
-
     const physicsData = mapConfig.physicsData;
     if (!physicsData) {
         console.warn(`[Physics Load] No physicsData found for map ${mapId}. No map colliders will be created.`);
@@ -219,7 +219,7 @@ function loadMapPhysics(mapId) {
     }
     console.log("[Physics Load] Found Physics Data:", JSON.stringify(physicsData, null, 2)); // Log the physics data
 
-    // NEW: Check for trimesh data first
+    // --- Only support Trimesh Loading ---
     if (physicsData.vertices && physicsData.vertices.length > 0 && physicsData.indices && physicsData.indices.length > 0) {
         console.log(`[Physics Load] Found vertices (${physicsData.vertices.length / 3}) and indices (${physicsData.indices.length / 3}). Attempting to load TR MESH...`);
         try {
@@ -238,67 +238,12 @@ function loadMapPhysics(mapId) {
             console.log(`[Physics Load] SUCCESS: Created trimesh map collider handle: ${collider.handle} attached to body handle: ${body.handle}`);
         } catch (error) {
             console.error(`[Physics Load] ERROR: Failed to create trimesh collider for map ${mapId}:`, error);
-            // Optionally, fallback to primitives if trimesh fails? Or just error out?
-            console.warn(`[Physics Load] Trimesh loading failed. Falling back to primitives if available...`);
-            // Proceed to check for colliders array as fallback
-            loadPrimitiveColliders(physicsData, mapId);
+            // No fallback to primitives
         }
-
     } else {
-        // If no valid trimesh data, check for primitive colliders
-        console.log(`[Physics Load] No valid trimesh data found (Vertices: ${physicsData.vertices?.length || 0}, Indices: ${physicsData.indices?.length || 0}). Checking for primitive colliders...`);
-        loadPrimitiveColliders(physicsData, mapId);
+        console.error(`[Physics Load] No valid trimesh data found for map ${mapId}. Physics loading failed.`);
     }
-
     console.log(`[Physics Load] Physics loading attempt complete for Map ${mapId}.`);
-}
-
-// NEW: Helper function to load primitive colliders
-function loadPrimitiveColliders(physicsData, mapId) {
-    if (physicsData.colliders && physicsData.colliders.length > 0) {
-        console.log(`[Physics Load - Primitives] Found ${physicsData.colliders.length} primitive colliders. Loading...`);
-        physicsData.colliders.forEach((colliderData, index) => {
-            // console.log(`[Collider ${index}] Data:`, JSON.stringify(colliderData)); // Optional detailed log
-            let colliderDesc;
-            let rigidBodyDesc = RAPIER.RigidBodyDesc.fixed(); // Assume static map geometry
-
-            if (colliderData.position) {
-                rigidBodyDesc.setTranslation(colliderData.position.x, colliderData.position.y, colliderData.position.z);
-            }
-            // TODO: Set rotation if provided: rigidBodyDesc.setRotation(...)
-
-            if (colliderData.type === 'cuboid') {
-                if (!colliderData.dimensions) { console.warn(`[Collider ${index}] Cuboid missing dimensions`); return; }
-                colliderDesc = RAPIER.ColliderDesc.cuboid(colliderData.dimensions.x / 2, colliderData.dimensions.y / 2, colliderData.dimensions.z / 2);
-            } else if (colliderData.type === 'ball') {
-                console.warn(`[Collider ${index}] Collider type '${colliderData.type}' creation not fully implemented.`); return;
-            } else if (colliderData.type === 'capsule'){
-                 console.warn(`[Collider ${index}] Collider type '${colliderData.type}' creation not fully implemented.`); return;
-            } else {
-                console.warn(`[Collider ${index}] Unsupported collider type: ${colliderData.type}`);
-                return;
-            }
-
-            if (colliderDesc) {
-                // Set Collision Groups for map geometry
-                const groups = interactionGroups(
-                    CollisionGroup.WORLD, // Belongs to WORLD group
-                    [CollisionGroup.PLAYER_BODY, CollisionGroup.GRENADE, CollisionGroup.PROJECTILE] // Collides with Players, Grenades, Projectiles (bullets)
-                );
-                colliderDesc.setCollisionGroups(groups);
-                // console.log(`[Collider ${index}] Set collision groups to:`, groups); // Optional detailed log
-
-                const body = rapierWorld.createRigidBody(rigidBodyDesc);
-                const collider = rapierWorld.createCollider(colliderDesc, body); // Pass body handle
-                // console.log(`[Collider ${index}] Created map collider handle: ${collider.handle} attached to body handle: ${body.handle}`); // Optional detailed log
-            } else {
-                console.warn(`[Collider ${index}] Failed to create ColliderDesc.`);
-            }
-        });
-         console.log(`[Physics Load - Primitives] Finished loading primitive colliders.`);
-    } else {
-        console.warn(`[Physics Load] No primitive colliders found in physicsData for map ${mapId}.`);
-    }
 }
 
 // Step 4: Initialize Player States (1.2.2)
@@ -320,7 +265,7 @@ function initializePlayerStates() {
             wallet: playerInfo.wallet, // Store wallet for escrow later
             characterId: playerInfo.charId,
             state: 'waiting', // Initial state before spawn
-            position: { x: 0, y: 1, z: 0 }, // Placeholder, set on spawn
+            position: { x: 0, y: 0, z: 0 }, // Will be set on spawn
             rotation: { x: 0, y: 0, z: 0, w: 1 }, // Placeholder, set on spawn/input
             velocity: { x: 0, y: 0, z: 0 }, // Updated from Rapier
             health: charConfig.baseHealth,
@@ -355,6 +300,10 @@ function initializePlayerStates() {
         };
         console.log(`Initialized state for ${playerInfo.userId} (Char: ${playerInfo.charId})`);
     });
+
+    // Immediately spawn both players at their correct spawn points
+    respawnPlayer(p1Info.userId);
+    respawnPlayer(p2Info.userId);
 }
 
 // Step 5: Initialize Socket.IO (1.2.2 / 1.3.2)
@@ -464,14 +413,304 @@ function initSocketIO() {
                 // players[associatedUserId].rapierBody.setLinvel({ x: currentLinvel.x * clampScale, y: currentLinvel.y, z: currentLinvel.z * clampScale }, true);
             }
         });
-        // TODO: Add handlers for other messages (FIRE, SWITCH_WEAPON, RELOAD, etc.)
-        // socket.on(MessageTypeFPS.PLAYER_FIRE_FPS, (fireData) => handlePlayerFire(associatedUserId, fireData));
-        // socket.on(MessageTypeFPS.SWITCH_WEAPON_FPS, (switchData) => handleWeaponSwitch(associatedUserId, switchData));
-        // socket.on(MessageTypeFPS.RELOAD_WEAPON_FPS, () => handleReload(associatedUserId));
-        // socket.on(MessageTypeFPS.THROW_GRENADE_FPS, (grenadeData) => handleThrowGrenade(associatedUserId, grenadeData));
-        // socket.on(MessageTypeFPS.USE_ABILITY_FPS, (abilityData) => handleUseAbility(associatedUserId, abilityData));
-        // socket.on(MessageTypeFPS.FIRE_GRAPPLE_FPS, (grappleData) => handleFireGrapple(associatedUserId, grappleData));
-        // socket.on(MessageTypeFPS.RELEASE_GRAPPLE_FPS, () => handleReleaseGrapple(associatedUserId));
+        
+        // [DELETE/REPLACE] Remove any old PLAYER_FIRE_FPS handler or TODOs
+        // [REPLACE] Implement robust PLAYER_FIRE_FPS handler:
+        socket.on(MessageTypeFPS.PLAYER_FIRE_FPS, (fireData) => {
+            // Validate player
+            if (!associatedUserId || !players[associatedUserId] || players[associatedUserId].state !== 'alive') return;
+            const playerState = players[associatedUserId];
+            const activeWeaponId = playerState.weaponSlots[playerState.activeWeaponSlot];
+            const weaponConfig = WEAPON_CONFIG_FPS[activeWeaponId];
+            if (!weaponConfig) return;
+            // Ammo check
+            if (playerState.currentAmmoInClip <= 0) return;
+            // Fire rate check
+            const now = Date.now();
+            if (now - playerState.serverLastFireTime < weaponConfig.fireRate) return;
+            playerState.serverLastFireTime = now;
+            // Lag compensation: get authoritative state at fireData.sequence
+            const inputHist = playerState.inputHistory[fireData.sequence];
+            const authoritativePos = inputHist ? playerState.position : playerState.position;
+            const authoritativeRot = inputHist ? inputHist.lookQuat : playerState.rotation;
+            // Apply spread
+            let direction = { ...fireData.direction };
+            const spread = playerState.currentSpread || weaponConfig.baseSpread;
+            direction.x += (Math.random() - 0.5) * spread;
+            direction.y += (Math.random() - 0.5) * spread;
+            direction.z += (Math.random() - 0.5) * spread;
+            // Normalize direction
+            const mag = Math.sqrt(direction.x**2 + direction.y**2 + direction.z**2);
+            if (mag > 1e-6) { direction.x /= mag; direction.y /= mag; direction.z /= mag; }
+            // Decrement ammo
+            playerState.currentAmmoInClip--;
+            playerState[`ammoInClipSlot${playerState.activeWeaponSlot}`] = playerState.currentAmmoInClip;
+            // Raycast
+            const ray = new RAPIER.Ray(authoritativePos, direction);
+            const hit = rapierWorld.castRay(ray, weaponConfig.range, true);
+            let hitPlayerId = null;
+            if (hit) {
+                // Check if hit a player
+                const collider = rapierWorld.getCollider(hit.collider);
+                const userData = collider && collider.userData;
+                if (userData && userData.type === 'playerBody' && userData.playerId !== associatedUserId) {
+                    hitPlayerId = userData.playerId;
+                    // Damage calculation
+                    let damage = weaponConfig.damage;
+                    // Damage amp ability
+                    if (playerState.damageAmpActiveUntil && playerState.damageAmpActiveUntil > now) {
+                        damage *= ABILITY_CONFIG_FPS[playerState.ability1Type]?.effectValue || 1.0;
+                    }
+                    // Apply damage to shield/health
+                    const victim = players[hitPlayerId];
+                    if (victim) {
+                        let shieldDmg = Math.min(victim.shield, damage);
+                        victim.shield -= shieldDmg;
+                        let healthDmg = damage - shieldDmg;
+                        if (healthDmg > 0) victim.health = Math.max(0, victim.health - healthDmg);
+                        // Log event
+                        console.log(`[SHOT_HIT] ${associatedUserId} hit ${hitPlayerId} for ${damage} (${shieldDmg} shield, ${healthDmg} health)`);
+                        // Broadcast hit confirmation
+                        io.emit(MessageTypeFPS.HIT_CONFIRMED_FPS, { shooterId: associatedUserId, victimId: hitPlayerId, damage, position: hit.point });
+                        // Check for death
+                        if (victim.health <= 0) {
+                            victim.state = 'dead';
+                            victim.deaths++;
+                            playerState.kills++;
+                            io.emit(MessageTypeFPS.PLAYER_DIED_FPS, { victimId: hitPlayerId, killerId: associatedUserId });
+                        }
+                    }
+                }
+            }
+            // Broadcast updated state
+            broadcastGameState();
+        });
+        // [DELETE/REPLACE] Remove any old SWITCH_WEAPON_FPS handler or TODOs
+        // [REPLACE] Implement robust SWITCH_WEAPON_FPS handler:
+        socket.on(MessageTypeFPS.SWITCH_WEAPON_FPS, (data) => {
+            if (!associatedUserId || !players[associatedUserId] || players[associatedUserId].state !== 'alive') return;
+            const playerState = players[associatedUserId];
+            const targetSlot = data.targetSlot;
+            if (typeof targetSlot !== 'number' || (targetSlot !== 0 && targetSlot !== 1)) return;
+            if (targetSlot === playerState.activeWeaponSlot) return;
+            // Cancel reload if switching
+            if (playerState.isReloading) playerState.isReloading = false;
+            // Store current ammo in the old slot
+            playerState[`ammoInClipSlot${playerState.activeWeaponSlot}`] = playerState.currentAmmoInClip;
+            // Switch slot
+            playerState.activeWeaponSlot = targetSlot;
+            // Load ammo for new slot
+            playerState.currentAmmoInClip = playerState[`ammoInClipSlot${targetSlot}`] ?? WEAPON_CONFIG_FPS[playerState.weaponSlots[targetSlot]]?.ammoCapacity ?? 0;
+            // Reset spread for new weapon
+            playerState.currentSpread = WEAPON_CONFIG_FPS[playerState.weaponSlots[targetSlot]]?.baseSpread ?? 0;
+            // Log event
+            console.log(`[SWITCH_WEAPON] ${associatedUserId} switched to slot ${targetSlot} (${playerState.weaponSlots[targetSlot]})`);
+            // Broadcast updated state
+            broadcastGameState();
+        });
+        // [DELETE/REPLACE] Remove any old RELOAD_WEAPON_FPS handler or TODOs
+        // [REPLACE] Implement robust RELOAD_WEAPON_FPS handler:
+        socket.on(MessageTypeFPS.RELOAD_WEAPON_FPS, () => {
+            if (!associatedUserId || !players[associatedUserId] || players[associatedUserId].state !== 'alive') return;
+            const playerState = players[associatedUserId];
+            if (playerState.isReloading) return;
+            const activeWeaponId = playerState.weaponSlots[playerState.activeWeaponSlot];
+            const weaponConfig = WEAPON_CONFIG_FPS[activeWeaponId];
+            if (!weaponConfig) return;
+            if (playerState.currentAmmoInClip >= weaponConfig.ammoCapacity) return;
+            // Start reload
+            playerState.isReloading = true;
+            console.log(`[RELOAD_START] ${associatedUserId} started reloading ${activeWeaponId}`);
+            broadcastGameState();
+            setTimeout(() => {
+                // Check if player is still alive and reloading the same weapon
+                if (!players[associatedUserId] || players[associatedUserId].state !== 'alive' || !playerState.isReloading) return;
+                // Complete reload
+                playerState.currentAmmoInClip = weaponConfig.ammoCapacity;
+                playerState[`ammoInClipSlot${playerState.activeWeaponSlot}`] = weaponConfig.ammoCapacity;
+                playerState.isReloading = false;
+                console.log(`[RELOAD_COMPLETE] ${associatedUserId} reloaded ${activeWeaponId}`);
+                broadcastGameState();
+            }, weaponConfig.reloadTime);
+        });
+        // [DELETE/REPLACE] Remove any old THROW_GRENADE_FPS handler or TODOs
+        // [REPLACE] Implement robust THROW_GRENADE_FPS handler:
+        socket.on(MessageTypeFPS.THROW_GRENADE_FPS, (data) => {
+            if (!associatedUserId || !players[associatedUserId] || players[associatedUserId].state !== 'alive') return;
+            const playerState = players[associatedUserId];
+            const grenadeType = data.type;
+            if (!grenadeType || !playerState.grenades[grenadeType] || playerState.grenades[grenadeType] <= 0) return;
+            const grenadeConfig = GRENADE_CONFIG_FPS[grenadeType];
+            if (!grenadeConfig) return;
+            // Decrement grenade count
+            playerState.grenades[grenadeType]--;
+            // Calculate throw origin and direction
+            const throwOrigin = { ...playerState.position };
+            const throwDir = data.direction || { x: 0, y: 1, z: 0 };
+            const throwVel = 20; // Tune as needed
+            // Create grenade physics object
+            const grenadeId = `g_${Date.now()}_${Math.floor(Math.random()*10000)}`;
+            const grenadeBodyDesc = RAPIER.RigidBodyDesc.dynamic()
+                .setTranslation(throwOrigin.x, throwOrigin.y, throwOrigin.z)
+                .setLinvel(throwDir.x * throwVel, throwDir.y * throwVel, throwDir.z * throwVel)
+                .setCcdEnabled(true);
+            const grenadeBody = rapierWorld.createRigidBody(grenadeBodyDesc);
+            const grenadeRadius = 0.1;
+            const grenadeColliderDesc = RAPIER.ColliderDesc.ball(grenadeRadius)
+                .setCollisionGroups(interactionGroups(CollisionGroup.GRENADE, [CollisionGroup.WORLD, CollisionGroup.PLAYER_BODY]))
+                .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS)
+                .setRestitution(0.5)
+                .setDensity(1.0);
+            const grenadeCollider = rapierWorld.createCollider(grenadeColliderDesc, grenadeBody);
+            // Store grenade state
+            if (!global.activeGrenades) global.activeGrenades = {};
+            global.activeGrenades[grenadeId] = {
+                id: grenadeId,
+                type: grenadeType,
+                body: grenadeBody,
+                collider: grenadeCollider,
+                ownerId: associatedUserId,
+                startTime: Date.now(),
+                fuseTimer: null,
+            };
+            // Start fuse timer
+            global.activeGrenades[grenadeId].fuseTimer = setTimeout(() => {
+                // Detonate grenade
+                const grenade = global.activeGrenades[grenadeId];
+                if (!grenade) return;
+                const pos = grenade.body.translation();
+                // AoE effect
+                if (grenadeType === GrenadeType.FRAG || grenadeType === GrenadeType.SEMTEX) {
+                    const explosionShape = new RAPIER.Ball(grenadeConfig.effectRadius);
+                    rapierWorld.intersectionsWithShape(pos, {w:1}, explosionShape, null, (collider) => {
+                        const userData = collider.userData;
+                        if (userData && userData.type === 'playerBody' && players[userData.playerId]) {
+                            const victim = players[userData.playerId];
+                            let damage = grenadeConfig.damage;
+                            let shieldDmg = Math.min(victim.shield, damage);
+                            victim.shield -= shieldDmg;
+                            let healthDmg = damage - shieldDmg;
+                            if (healthDmg > 0) victim.health = Math.max(0, victim.health - healthDmg);
+                            if (victim.health <= 0) {
+                                victim.state = 'dead';
+                                victim.deaths++;
+                                playerState.kills++;
+                                io.emit(MessageTypeFPS.PLAYER_DIED_FPS, { victimId: userData.playerId, killerId: associatedUserId });
+                            }
+                        }
+                        return true;
+                    });
+                } else if (grenadeType === GrenadeType.FLASHBANG) {
+                    // Flash effect (simplified)
+                    for (const pid in players) {
+                        const victim = players[pid];
+                        if (victim && victim.state === 'alive') {
+                            victim.isFlashedUntil = Date.now() + (grenadeConfig.flashDuration || 2000);
+                        }
+                    }
+                }
+                // Broadcast explosion event
+                io.emit(MessageTypeFPS.GRENADE_EXPLODED_FPS, { id: grenadeId, type: grenadeType, position: pos });
+                // Cleanup
+                rapierWorld.removeCollider(grenade.collider, false);
+                rapierWorld.removeRigidBody(grenade.body);
+                clearTimeout(grenade.fuseTimer);
+                delete global.activeGrenades[grenadeId];
+                broadcastGameState();
+            }, grenadeConfig.fuseTime);
+            // Log event
+            console.log(`[GRENADE_THROWN] ${associatedUserId} threw ${grenadeType} (${grenadeId})`);
+            broadcastGameState();
+        });
+
+        socket.on(MessageTypeFPS.USE_ABILITY_FPS, (data) => {
+            if (!associatedUserId || !players[associatedUserId] || players[associatedUserId].state !== 'alive') return;
+            const playerState = players[associatedUserId];
+            const abilitySlot = data.abilitySlot;
+            if (abilitySlot !== 1 || playerState.ability1CooldownRemaining > 0) return;
+            const abilityType = playerState.ability1Type;
+            const abilityConfig = ABILITY_CONFIG_FPS[abilityType];
+            if (!abilityConfig) return;
+            // Start cooldown
+            playerState.ability1CooldownRemaining = abilityConfig.cooldown;
+            // Apply effect
+            if (abilityType === 'dash') {
+                // Dash: apply impulse in look direction
+                const body = playerState.rapierBody;
+                if (body) {
+                    const lookQuat = playerState.rotation;
+                    // Calculate forward vector from quaternion
+                    const q = lookQuat;
+                    const forward = {
+                        x: 2 * (q.x * q.z + q.w * q.y),
+                        y: 0,
+                        z: 1 - 2 * (q.y * q.y + q.x * q.x)
+                    };
+                    const mag = Math.sqrt(forward.x**2 + forward.z**2);
+                    if (mag > 1e-6) { forward.x /= mag; forward.z /= mag; }
+                    const dashImpulse = { x: forward.x * abilityConfig.effectValue, y: 0.5, z: forward.z * abilityConfig.effectValue };
+                    body.applyImpulse(dashImpulse, true);
+                }
+            } else if (abilityType === 'heal_burst') {
+                // Heal: restore shield, then health
+                const maxShield = CHARACTER_CONFIG_FPS[playerState.characterId].baseShield;
+                const maxHealth = CHARACTER_CONFIG_FPS[playerState.characterId].baseHealth;
+                let healLeft = abilityConfig.effectValue;
+                const shieldHeal = Math.min(maxShield - playerState.shield, healLeft);
+                playerState.shield += shieldHeal;
+                healLeft -= shieldHeal;
+                if (healLeft > 0) {
+                    const healthHeal = Math.min(maxHealth - playerState.health, healLeft);
+                    playerState.health += healthHeal;
+                }
+            } else if (abilityType === 'damage_amp') {
+                // Damage amp: set active until timestamp
+                playerState.damageAmpActiveUntil = Date.now() + (abilityConfig.duration || 5000);
+            }
+            // Log event
+            console.log(`[ABILITY_USED] ${associatedUserId} used ${abilityType}`);
+            // Broadcast ability use event and updated state
+            io.emit(MessageTypeFPS.ABILITY_USED_FPS, { playerId: associatedUserId, abilityType });
+            broadcastGameState();
+        });
+
+        // [DELETE/REPLACE] Remove any old FIRE_GRAPPLE_FPS and RELEASE_GRAPPLE_FPS handlers or TODOs
+        // [REPLACE] Implement robust grapple gun handlers:
+        socket.on(MessageTypeFPS.FIRE_GRAPPLE_FPS, (data) => {
+            if (!associatedUserId || !players[associatedUserId] || players[associatedUserId].state !== 'alive') return;
+            const playerState = players[associatedUserId];
+            if (playerState.grappleState.active) return;
+            const target = data.targetPoint;
+            if (!target) return;
+            const body = playerState.rapierBody;
+            if (!body) return;
+            const pos = body.translation();
+            // Check range
+            const dx = target.x - pos.x, dy = target.y - pos.y, dz = target.z - pos.z;
+            const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+            const MAX_GRAPPLE_RANGE = 31;
+            if (dist > MAX_GRAPPLE_RANGE) return;
+            // Server-side raycast for line of sight
+            const ray = new RAPIER.Ray(pos, { x: dx/dist, y: dy/dist, z: dz/dist });
+            const hit = rapierWorld.castRay(ray, dist + 0.1, true);
+            if (!hit || hit.toi > dist + 0.05) return;
+            // Set grapple state
+            playerState.grappleState = {
+                active: true,
+                targetPoint: { x: target.x, y: target.y, z: target.z },
+                startTime: Date.now(),
+            };
+            console.log(`[GRAPPLE_FIRED] ${associatedUserId} grappled to (${target.x},${target.y},${target.z})`);
+            broadcastGameState();
+        });
+        socket.on(MessageTypeFPS.RELEASE_GRAPPLE_FPS, () => {
+            if (!associatedUserId || !players[associatedUserId] || players[associatedUserId].state !== 'alive') return;
+            const playerState = players[associatedUserId];
+            if (!playerState.grappleState.active) return;
+            playerState.grappleState = { active: false, targetPoint: null, startTime: null };
+            console.log(`[GRAPPLE_RELEASED] ${associatedUserId} released grapple`);
+            broadcastGameState();
+        });
 
         socket.on('disconnect', (reason) => {
             console.log(`Client socket disconnected: ${socket.id}, Reason: ${reason}`);
@@ -735,156 +974,101 @@ process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
 
-// --- Input Handling --- (Plan 2.2.1 / 2.3.2)
+// --- Input Handler: Receives PLAYER_INPUT_FPS, validates, stores, and applies to physics ---
 function handlePlayerInput(playerId, inputData) {
+    // Validate player state
     const playerState = players[playerId];
-    if (!playerState || playerState.state !== 'alive' || !playerState.rapierBody) {
-        // console.warn(`Ignoring input for player ${playerId} in state ${playerState?.state}`);
-        return; // Ignore input if player is not in a state to receive it
-    }
-
+    if (!playerState || playerState.state !== 'alive' || !playerState.rapierBody) return;
     const { sequence, deltaTime, keys, lookQuat } = inputData;
-
-    // --- Server-Side Validation (Basic Sequence Check) ---
-    // We expect sequence numbers to generally increase, but allow for out-of-order packets to some extent.
-    // A more robust system would handle packet loss and reordering explicitly.
-    if (sequence <= playerState.lastProcessedSequence) {
-         // console.warn(`Received old input sequence ${sequence} from ${playerId} (last was ${playerState.lastProcessedSequence}). Ignoring.`);
-         // return; // Don't strictly reject old inputs, as they might be valid if UDP reordered
-    }
-
-    // Store input for potential rollback/lag compensation later
-    // Limit history size
-    const MAX_INPUT_HISTORY = 120; // ~2 seconds at 60hz
+    // Sequence validation (allow some out-of-order, but ignore duplicates)
+    if (sequence <= playerState.lastProcessedSequence) return;
+    // Store input for reconciliation/lag comp
+    const MAX_INPUT_HISTORY = 120;
     playerState.inputHistory[sequence] = { keys, lookQuat, deltaTime };
     const historyKeys = Object.keys(playerState.inputHistory);
-    if (historyKeys.length > MAX_INPUT_HISTORY) {
-        delete playerState.inputHistory[historyKeys[0]]; // Remove oldest entry
-    }
-
-    // --- Apply Input to Physics ---
+    if (historyKeys.length > MAX_INPUT_HISTORY) delete playerState.inputHistory[historyKeys[0]];
+    // Apply input to physics
     applyMovementInputToPlayer(playerId, playerState.rapierBody, keys, lookQuat, deltaTime);
-
-    // --- Update Server State ---
-    playerState.lastProcessedSequence = sequence; // Acknowledge processing this input sequence
-
-    // Update player look direction (important for shooting direction later)
-    // Directly use the client's quaternion for looking up/down/left/right
-    playerState.rotation = { ...lookQuat }; // Store the look rotation
-    // Apply this rotation to the physics body ONLY if not locked (e.g., for turning, but capsule has locked rotations)
-    // playerState.rapierBody.setRotation(lookQuat, true); // This would make capsule lean/turn if rotations weren't locked
-
-    // Basic Speed Validation (Plan 6.2.1)
+    playerState.lastProcessedSequence = sequence;
+    playerState.rotation = { ...lookQuat };
+    // Speed validation (allow higher if dash/grapple active)
     const currentLinvel = playerState.rapierBody.linvel();
-    const currentSpeed = Math.sqrt(currentLinvel.x**2 + currentLinvel.y**2 + currentLinvel.z**2);
     let allowedMaxSpeed = MAX_PLAYER_SPEED;
-    // TODO: Increase allowedMaxSpeed if abilities like Dash or Grapple are active
+    if (playerState.ability1Type === ABILITY_CONFIG_FPS.DASH && playerState.ability1CooldownRemaining > 0) allowedMaxSpeed *= 1.5;
+    if (playerState.grappleState.active) allowedMaxSpeed *= 2.0;
+    const currentSpeed = Math.sqrt(currentLinvel.x**2 + currentLinvel.y**2 + currentLinvel.z**2);
     if (currentSpeed > allowedMaxSpeed) {
-        console.warn(`Player ${playerId} exceeded max speed! Speed: ${currentSpeed.toFixed(2)}`);
-        // Option: Clamp velocity?
-        // const clampScale = allowedMaxSpeed / currentSpeed;
-        // playerState.rapierBody.setLinvel({ x: currentLinvel.x * clampScale, y: currentLinvel.y, z: currentLinvel.z * clampScale }, true);
+        // Clamp velocity
+        const clampScale = allowedMaxSpeed / currentSpeed;
+        playerState.rapierBody.setLinvel({ x: currentLinvel.x * clampScale, y: currentLinvel.y, z: currentLinvel.z * clampScale }, true);
     }
 }
 
-// --- Physics Application ---
+// --- Movement Engine: Applies validated input to Rapier body ---
 function applyMovementInputToPlayer(playerId, playerBody, keys, lookQuat, deltaTime) {
     if (!playerBody || deltaTime <= 0) return;
-
-    const playerState = players[playerId]; // Access player state for ground check, etc.
-    const isOnGround = playerState.isOnGround; // Assume this is updated elsewhere (collision checks)
-    const canJump = isOnGround && (Date.now() - playerState.lastJumpTime > 300); // Simple jump cooldown
-
-    const effectiveAccelForce = ACCELERATION_FORCE * deltaTime;
-    const effectiveMaxAccelForce = MAX_ACCEL_FORCE; // Max force per tick, not scaled by deltaTime? Test this.
-
-    // --- Calculate Desired Movement ---
-    let desiredVelocity = { x: 0, z: 0 }; // Movement on XZ plane
+    const playerState = players[playerId];
+    const isOnGround = playerState.isOnGround;
+    const canJump = isOnGround && (Date.now() - playerState.lastJumpTime > 300);
+    // Calculate desired movement
+    let desiredVelocity = { x: 0, z: 0 };
     let moveDirection = { x: 0, z: 0 };
     let isMoving = false;
-
-    // Get forward/right vectors based on lookQuat (Y component only for ground movement)
-    // We need a stable forward/right projected onto the ground plane.
-    // Create a quaternion representing only the yaw rotation.
+    // Yaw-only quaternion for ground movement
     const yawQuaternion = { x:0, y: lookQuat.y, z: 0, w: lookQuat.w };
-    // Normalize the yaw quaternion (important!)
     const yawMag = Math.sqrt(yawQuaternion.y**2 + yawQuaternion.w**2);
-    if (yawMag > 1e-6) { // Avoid division by zero
-        yawQuaternion.y /= yawMag;
-        yawQuaternion.w /= yawMag;
-    } else {
-        yawQuaternion.w = 1.0; // Default to no rotation if magnitude is near zero
-    }
-
-    // Use THREE math temporarily for vector application (avoid adding full lib if possible)
-    // TODO: Replace with pure math if THREE isn't added server-side
-    const _forward = {x: 0, y: 0, z: -1}; // Base forward vector
-    const _right = {x: 1, y: 0, z: 0};   // Base right vector
-
-    // Apply yaw rotation (simplified quaternion rotation)
+    if (yawMag > 1e-6) { yawQuaternion.y /= yawMag; yawQuaternion.w /= yawMag; } else { yawQuaternion.w = 1.0; }
+    const _forward = {x: 0, y: 0, z: -1};
+    const _right = {x: 1, y: 0, z: 0};
     const forward = applyQuaternion(_forward, yawQuaternion);
     const right = applyQuaternion(_right, yawQuaternion);
-
-    console.log(`[ApplyInput] Applying for ${playerState.userId} Seq: ${sequence}, Keys: ${JSON.stringify(keys)}`); // Log Keys
-
     if (keys.W) { moveDirection.x += forward.x; moveDirection.z += forward.z; isMoving = true; }
     if (keys.S) { moveDirection.x -= forward.x; moveDirection.z -= forward.z; isMoving = true; }
     if (keys.A) { moveDirection.x -= right.x; moveDirection.z -= right.z; isMoving = true; }
     if (keys.D) { moveDirection.x += right.x; moveDirection.z += right.z; isMoving = true; }
-
     if (isMoving) {
         const mag = Math.sqrt(moveDirection.x**2 + moveDirection.z**2);
-        if (mag > 1e-6) { // Normalize
-            moveDirection.x /= mag;
-            moveDirection.z /= mag;
-        }
+        if (mag > 1e-6) { moveDirection.x /= mag; moveDirection.z /= mag; }
         const targetSpeed = keys.Shift ? RUN_SPEED : WALK_SPEED;
         desiredVelocity.x = moveDirection.x * targetSpeed;
         desiredVelocity.z = moveDirection.z * targetSpeed;
     }
-
-    console.log(`[ApplyInput] MoveDirection Raw: ${JSON.stringify(moveDirection)}`); // Log Move Direction
-
-    const moveLen = Math.sqrt(moveDirection.x**2 + moveDirection.z**2);
-    if (isMoving && moveLen > 0.01) {
-        desiredVelocity.x = moveDirection.x * targetSpeed;
-        desiredVelocity.z = moveDirection.z * targetSpeed;
-    }
-
-    console.log(`[ApplyInput] Desired Velocity: ${JSON.stringify(desiredVelocity)}`); // Log Desired Velocity
-
-    // --- Apply Force --- (Similar to client prediction logic)
+    // Apply force
     const currentLinvel = playerBody.linvel();
     let force = { x: 0, y: 0, z: 0 };
     const velocityDiffX = desiredVelocity.x - currentLinvel.x;
     const velocityDiffZ = desiredVelocity.z - currentLinvel.z;
-
-    force.x = velocityDiffX * effectiveAccelForce;
-    force.z = velocityDiffZ * effectiveAccelForce;
-
-    // Apply air control factor if not on ground
-    if (!isOnGround) {
-        force.x *= AIR_CONTROL_FACTOR;
-        force.z *= AIR_CONTROL_FACTOR;
-    }
-
-    // Clamp force per tick
-    console.log(`[ApplyInput] Calculated Force (Pre-Clamp): ${JSON.stringify(force)}`); // Log Pre-Clamp Force
+    force.x = velocityDiffX * ACCELERATION_FORCE * deltaTime;
+    force.z = velocityDiffZ * ACCELERATION_FORCE * deltaTime;
+    if (!isOnGround) { force.x *= AIR_CONTROL_FACTOR; force.z *= AIR_CONTROL_FACTOR; }
     const forceMagnitude = Math.sqrt(force.x**2 + force.z**2);
-    if (forceMagnitude > effectiveMaxAccelForce) {
-        const scale = effectiveMaxAccelForce / forceMagnitude;
-        force.x *= scale;
-        force.z *= scale;
+    if (forceMagnitude > MAX_ACCEL_FORCE) {
+        const scale = MAX_ACCEL_FORCE / forceMagnitude;
+        force.x *= scale; force.z *= scale;
     }
-    playerBody.applyImpulse(force, true); // Apply impulse for ground movement force
-
-    // --- Jumping ---
+    playerBody.applyImpulse(force, true);
+    // Jumping
     if (keys.Space && canJump) {
-        // Apply upward impulse only if on ground
         playerBody.applyImpulse({ x: 0, y: JUMP_IMPULSE, z: 0 }, true);
-        playerState.isOnGround = false; // Assume player leaves ground immediately
+        playerState.isOnGround = false;
         playerState.lastJumpTime = Date.now();
-        console.log(`Player ${playerId} Jumped!`);
+    }
+    // Grapple Gun Physics (if active)
+    if (playerState.grappleState.active && playerState.grappleState.targetPoint) {
+        const pos = playerBody.translation();
+        const target = playerState.grappleState.targetPoint;
+        const dir = { x: target.x - pos.x, y: target.y - pos.y, z: target.z - pos.z };
+        const dist = Math.sqrt(dir.x**2 + dir.y**2 + dir.z**2);
+        if (dist > 0.5) {
+            const norm = { x: dir.x/dist, y: dir.y/dist, z: dir.z/dist };
+            const grappleForce = 60.0; // Tune as needed
+            playerBody.applyImpulse({ x: norm.x * grappleForce * deltaTime, y: norm.y * grappleForce * deltaTime, z: norm.z * grappleForce * deltaTime }, true);
+        } else {
+            // Auto-release grapple if close
+            playerState.grappleState.active = false;
+            playerState.grappleState.targetPoint = null;
+            playerState.grappleState.startTime = null;
+        }
     }
 }
 

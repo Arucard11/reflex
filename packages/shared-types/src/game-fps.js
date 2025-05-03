@@ -134,10 +134,8 @@ export const CHARACTER_CONFIG_FPS = {
  * @typedef {Object} MapPhysicsDataFPS - Structure for physics geometry
  * @property {Array<number>} [vertices] - Optional vertex buffer
  * @property {Array<number>} [indices] - Optional index buffer for trimesh
- * @property {Array<Object>} [colliders] - Array of primitive colliders (cuboid, ball, capsule)
- * @property {Array<{x: number, y: number, z: number}>} spawnPoints - NEW: Define potential spawn locations
+ * @property {Array<{x: number, y: number, z: number}>} spawnPoints - Define potential spawn locations
  */
-// Example primitive collider: { type: 'cuboid', position: {x,y,z}, dimensions: {x,y,z}, rotation: {x,y,z,w} }
 
 /**
  * @typedef {Object} MapConfigFPS
@@ -153,40 +151,21 @@ export const MAP_CONFIGS_FPS = {
             // Use extracted trimesh data
             vertices: map1Vertices,
             indices: map1Indices,
-            // Keep spawn points
-            spawnPoints: [{ x: -5, y: 1, z: 6 }, { x: 5, y: 1, z: 3 }],
-            // Remove primitive colliders if using trimesh
-            // colliders: [
-            //     { type: 'cuboid', position: { x: 0, y: -0.1, z: 0 }, dimensions: { x: 100, y: 0.2, z: 100 } }, // Ground
-            //     { type: 'cuboid', position: { x: 0, y: 2, z: 15 }, dimensions: { x: 20, y: 4, z: 0.5 } }, // Wall 1
-            //     // ... more walls, boxes, etc.
-            // ],
+            spawnPoints: [{ x: -10, y: 5, z: 8 }, { x: 10, y: 9, z: 8 }],
         }
     },
     [MapId.MAP_2]: {
         id: MapId.MAP_2, name: 'Map 2', visualAssetPath: '/assets/fps_1v1/models/map2.glb',
         physicsData: {
-            // Use extracted trimesh data
             vertices: map2Vertices,
             indices: map2Indices,
-             // Keep spawn points
             spawnPoints: [{ x: 0, y: 1, z: -10 }, { x: 0, y: 1, z: 10 }],
-            // Remove primitive colliders if using trimesh
-            // colliders: [
-            //     { type: 'cuboid', position: { x: 0, y: -0.1, z: 0 }, dimensions: { x: 100, y: 0.2, z: 100 } }, // Ground
-            //     { type: 'cuboid', position: { x: 0, y: 2, z: 15 }, dimensions: { x: 20, y: 4, z: 0.5 } }, // Wall 1
-            //     // ... more walls, boxes, etc.
-            // ],
         }
     },
     [MapId.MAP_3]: {
         id: MapId.MAP_3, name: 'Map 3', visualAssetPath: '/assets/fps_1v1/models/map3.glb',
-        // Map 3 extraction failed - Keep using primitive colliders as fallback
+        // Map 3: No trimesh data available, leave vertices/indices undefined (physics loading will fail)
         physicsData: {
-            colliders: [
-                { type: 'cuboid', position: { x: 0, y: -0.1, z: 0 }, dimensions: { x: 100, y: 0.2, z: 100 } }, // Ground
-                // TODO: Add more representative colliders for map 3 if needed
-            ],
             spawnPoints: [{ x: -15, y: 1, z: 0 }, { x: 15, y: 1, z: 0 }]
         }
     },

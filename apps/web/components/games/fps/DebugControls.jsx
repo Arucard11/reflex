@@ -17,12 +17,9 @@ function DebugControls({
     useEffect(() => {
         console.log('[DebugControls Setup Effect] Running. isEnabled:', isEnabled); // Log effect run
 
-        // NEW: Explicit check if renderer element is attached to the document
-        const isRendererAttached = renderer?.domElement && document.body.contains(renderer.domElement);
-
-        if (!camera || !renderer?.domElement || !isRendererAttached || !scene || !rapierWorld) {
-            console.log("[DebugControls Setup Effect] Missing required refs/props or renderer not attached. Aborting setup/cleanup logic for now.");
-            console.log(`[DebugControls Setup Effect] Details: camera=${!!camera}, renderer=${!!renderer}, domElement=${!!renderer?.domElement}, attached=${isRendererAttached}, scene=${!!scene}, rapierWorld=${!!rapierWorld}`);
+        // Check for core object validity first
+        if (!camera || !renderer?.domElement || !scene || !rapierWorld) {
+            console.log("[DebugControls Setup Effect] Missing required refs/props. Cannot setup yet.");
             // Dispose existing controls and lines if required objects missing (redundant but safe)
             if (orbitControlsRef.current) {
                 orbitControlsRef.current.dispose();
@@ -38,23 +35,23 @@ function DebugControls({
         }
         console.log('[DebugControls Setup Effect] Core objects seem valid.');
 
-        // --- Setup/Manage Orbit Controls ---
-        if (isEnabled) {
-            if (!orbitControlsRef.current) {
-                console.log("[DebugControls Setup Effect] OrbitControls don't exist. Attempting creation...");
+        // --- Create OrbitControls ONCE if they don't exist ---
+        if (!orbitControlsRef.current) {
+            console.log("[DebugControls Setup Effect] OrbitControls instance doesn't exist. Attempting creation...");
+            const isRendererAttached = document.body.contains(renderer.domElement);
+            if (isRendererAttached) {
                 try {
-                    // Re-check attachment here as well for safety
-                    if (camera instanceof THREE.PerspectiveCamera && renderer.domElement instanceof HTMLElement && isRendererAttached) {
+                    if (camera instanceof THREE.PerspectiveCamera && renderer.domElement instanceof HTMLElement) {
                         orbitControlsRef.current = new OrbitControls(camera, renderer.domElement);
                         orbitControlsRef.current.enableDamping = true;
                         orbitControlsRef.current.dampingFactor = 0.05;
                         orbitControlsRef.current.screenSpacePanning = true;
                         orbitControlsRef.current.minDistance = 1;
                         orbitControlsRef.current.maxDistance = 50;
-                        orbitControlsRef.current.enabled = true; // Explicitly enable
-                        console.log('[DebugControls Setup Effect] OrbitControls CREATED and ENABLED.');
+                        orbitControlsRef.current.enabled = isEnabled; // Initial state based on prop
+                        console.log(`[DebugControls Setup Effect] OrbitControls CREATED. Initial enabled state: ${isEnabled}`);
                     } else {
-                        console.error('[DebugControls Setup Effect] Invalid camera/renderer element TYPE or renderer NOT ATTACHED for OrbitControls.');
+                        console.error('[DebugControls Setup Effect] Invalid camera or renderer element TYPE during OrbitControls creation.');
                     }
                 } catch (error) {
                     console.error('[DebugControls Setup Effect] Failed to CREATE OrbitControls:', error);
@@ -68,59 +65,57 @@ function DebugControls({
                     orbitControlsRef.current = null;
                 }
             } else {
-                // If controls already exist, just ensure they are enabled
-                console.log('[DebugControls Setup Effect] OrbitControls already exist. Ensuring enabled.');
-                orbitControlsRef.current.enabled = true;
+                console.warn('[DebugControls Setup Effect] Renderer DOM element not attached to document body. Cannot create OrbitControls yet.');
             }
         } else {
-            // If isEnabled is false, disable controls
-            if (orbitControlsRef.current) {
-                console.log('[DebugControls Setup Effect] isEnabled is false. Disabling OrbitControls.');
-                orbitControlsRef.current.enabled = false;
-            }
+             console.log("[DebugControls Setup Effect] OrbitControls instance already exists.");
         }
 
-        // --- Setup/Manage Physics Debug Lines ---
-        if (isEnabled) {
-             if (!linesRef.current) {
-                 console.log("[DebugControls Setup Effect] Debug lines don't exist. Creating...");
-                linesRef.current = new THREE.LineSegments(
-                    new THREE.BufferGeometry(),
-                    new THREE.LineBasicMaterial({ color: 0xffffff, vertexColors: true })
-                );
-                scene.add(linesRef.current);
-                 console.log("[DebugControls Setup Effect] Debug lines CREATED.");
-            }
-             console.log("[DebugControls Setup Effect] Ensuring debug lines are visible.");
-             linesRef.current.visible = true; // Ensure visible when enabled
+        // --- Create Debug Lines ONCE if they don't exist ---
+        if (!linesRef.current) {
+             console.log("[DebugControls Setup Effect] Debug lines don't exist. Creating...");
+            linesRef.current = new THREE.LineSegments(
+                new THREE.BufferGeometry(),
+                new THREE.LineBasicMaterial({ color: 0xffffff, vertexColors: true })
+            );
+            scene.add(linesRef.current);
+             console.log("[DebugControls Setup Effect] Debug lines CREATED.");
         } else {
-            // Hide lines when disabled
-            if (linesRef.current) {
-                 console.log("[DebugControls Setup Effect] isEnabled is false. Hiding debug lines.");
-                linesRef.current.visible = false;
-            }
+             console.log("[DebugControls Setup Effect] Debug lines instance already exists.");
         }
 
-        // --- Cleanup on Unmount ---
+        // MOVED Cleanup logic inside the main effect block
         return () => {
             console.log('[DebugControls Setup Effect] Cleaning up on unmount...');
             if (orbitControlsRef.current) {
                 orbitControlsRef.current.dispose();
                 orbitControlsRef.current = null;
-                 console.log('[DebugControls Setup Effect] OrbitControls disposed on unmount.');
+                console.log('[DebugControls Setup Effect] OrbitControls disposed on unmount.');
             }
             if (linesRef.current) {
                 if(scene) scene.remove(linesRef.current);
                 linesRef.current.geometry?.dispose();
                 linesRef.current.material?.dispose();
                 linesRef.current = null;
-                 console.log('[DebugControls Setup Effect] Physics debug lines removed and disposed on unmount.');
+                console.log('[DebugControls Setup Effect] Physics debug lines removed and disposed on unmount.');
             }
         };
+    }, [camera, renderer, scene, rapierWorld]); // Dependencies: Only core objects for creation
 
-    }, [isEnabled, camera, renderer, scene, rapierWorld]); // Dependencies for setup/cleanup/enable/disable
+    // Effect 2: Manage Enabled state based on isEnabled prop
+    useEffect(() => {
+        console.log('[DebugControls Enable Effect] Running. isEnabled:', isEnabled);
+        if (orbitControlsRef.current) {
+            console.log(`[DebugControls Enable Effect] Setting OrbitControls enabled to: ${isEnabled}`);
+            orbitControlsRef.current.enabled = isEnabled;
+        }
+        if (linesRef.current) {
+            console.log(`[DebugControls Enable Effect] Setting lines visible to: ${isEnabled}`);
+            linesRef.current.visible = isEnabled;
+        }
+    }, [isEnabled]); // Dependency: Only isEnabled prop
 
-    // Effect 2: Update Loop Management
+    // Effect 3: Update Loop Management
     useEffect(() => {
         console.log('[DebugControls Update Effect] Running. isEnabled:', isEnabled, 'Controls enabled:', orbitControlsRef.current?.enabled); // Log effect run and controls state
 
