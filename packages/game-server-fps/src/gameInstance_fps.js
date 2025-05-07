@@ -198,7 +198,7 @@ function createPlayerPhysicsBody(playerId, position) {
     // Set user data on the collider after creation
     const collider = rapierWorld.createCollider(colliderDesc, body);
     if (collider) {
-        collider.setUserData({ type: 'playerBody', playerId: playerId });
+        collider.userData = { type: 'playerBody', playerId: playerId };
     }
 
     console.log(`Physics body created for ${playerId} with handle: ${body.handle}`);
@@ -1194,7 +1194,7 @@ function respawnPlayer(playerId) {
 
     // Find spawn point using map config
     const mapConfig = MAP_CONFIGS_FPS[config.mapId];
-    const spawnPoints = mapConfig?.physicsData?.spawnPoints || [{x: 0, y: 1, z: 0}]; // Default spawn
+    const spawnPoints = mapConfig?.physicsData?.spawnPoints || [{x: 1, y: 4, z: 0}]; // Default spawn
     // Simple alternating spawn (needs refinement for fairness)
     const p1Id = config.playersInfo.p1.userId;
     const p2Id = config.playersInfo.p2.userId;
