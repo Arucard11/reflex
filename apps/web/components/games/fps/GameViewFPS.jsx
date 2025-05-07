@@ -691,29 +691,37 @@ function GameViewFPS({
                         // NEW: Update mesh from predicted Rapier body state
                         if (localPlayerRef.current.rapierBody) {
                             // Define capsule dimensions (must match server/client creation)
-                            const playerHeight = 1.8;
-                            const playerRadius = 0.4;
-                            const capsuleHalfHeight = playerHeight / 2;
-                            // Assuming model pivot is at its feet, no vertical offset needed relative to capsule bottom
-                            const visualMeshOffsetY = 0; // <<< CHANGE OFFSET TO 0
+                            const playerHeight = 1.8; // The total height of your capsule
+                            // const playerRadius = 0.4; // The radius of your capsule (not directly needed for this offset calc)
+                            
+                            // For positioning the visual model, we care about the total half-height from the capsule's center to its bottom.
+                            const totalCapsuleHalfHeight = playerHeight / 2;
 
                             const predictedPos = localPlayerRef.current.rapierBody.translation(); // Center of capsule
                             const predictedRot = localPlayerRef.current.rapierBody.rotation(); // Rapier returns {x,y,z,w}
                             // >>> ADDED LOG <<<
-                            console.log(`[Predict] Syncing Mesh: Body Pos=(${predictedPos.x.toFixed(2)}, ${predictedPos.y.toFixed(2)}, ${predictedPos.z.toFixed(2)})`);
+                            // console.log(`[Predict] Syncing Mesh: Body Pos=(${predictedPos.x.toFixed(2)}, ${predictedPos.y.toFixed(2)}, ${predictedPos.z.toFixed(2)})`);
                             
-                            // Position mesh origin (feet) at the bottom of the physics capsule
+                            // Position the model's pivot (assumed to be at its feet)
+                            // at the bottom of the physics capsule.
                             localPlayerRef.current.mesh.position.set(
                                 predictedPos.x,
-                                predictedPos.y - capsuleHalfHeight + visualMeshOffsetY, // <<< ADJUST POSITIONING
+                                predictedPos.y - totalCapsuleHalfHeight, // Move model down by half the capsule's total height
                                 predictedPos.z
                             );
                             // >>> ADDED LOG <<<
-                            console.log(`[Predict] Syncing Mesh: Mesh Pos=(${localPlayerRef.current.mesh.position.x.toFixed(2)}, ${localPlayerRef.current.mesh.position.y.toFixed(2)}, ${localPlayerRef.current.mesh.position.z.toFixed(2)})`);
+                            // console.log(`[Predict] Syncing Mesh: Mesh Pos=(${localPlayerRef.current.mesh.position.x.toFixed(2)}, ${localPlayerRef.current.mesh.position.y.toFixed(2)}, ${localPlayerRef.current.mesh.position.z.toFixed(2)})`);
                             // Don't directly set mesh rotation from body if using third person lookAt
                             if (!cameraModeRef.current.isThirdPerson) {
                                 // In first person, mesh (usually hidden) should match body rotation
                                 localPlayerRef.current.mesh.quaternion.set(predictedRot.x, predictedRot.y, predictedRot.z, predictedRot.w);
+                            } else {
+                                // In third person, the body's rotation (which includes pitch from looking up/down if not locked)
+                                // might not be what you want for the visual model if the camera also controls pitch.
+                                // Often, you only apply the YAW rotation to the model.
+                                const bodyQuaternion = new THREE.Quaternion(predictedRot.x, predictedRot.y, predictedRot.z, predictedRot.w);
+                                const euler = new THREE.Euler().setFromQuaternion(bodyQuaternion, 'YXZ');
+                                localPlayerRef.current.mesh.rotation.y = euler.y; // Apply only yaw
                             }
                         } else if (localState && localState.position && localState.rotation) {
                             // Fallback to lerping server state if body missing (e.g., before spawn)
@@ -727,17 +735,19 @@ function GameViewFPS({
                             remotePlayerRef.current.mesh.visible = true; // Show remote player always
                             // NEW: Calculate offset like local player
                             const playerHeight = 1.8; // Assume same height
-                            const playerRadius = 0.4;
-                            const capsuleHalfHeight = playerHeight / 2 - playerRadius;
-                            const visualMeshOffsetY = 0;
+                            // const playerRadius = 0.4;
+                            const totalCapsuleHalfHeight = playerHeight / 2;
+                            // const visualMeshOffsetY = 0; // Assuming pivot at feet
                             const targetPosition = new THREE.Vector3(
                                 remoteState.position.x,
-                                remoteState.position.y - capsuleHalfHeight + visualMeshOffsetY, // Apply offset
+                                remoteState.position.y - totalCapsuleHalfHeight, // Apply offset
                                 remoteState.position.z
                             );
                             remotePlayerRef.current.mesh.position.lerp(targetPosition, 0.3); // Lerp to the adjusted target
                             // END NEW
-                            remotePlayerRef.current.mesh.quaternion.slerp(remoteState.rotation, 0.3);
+                            // For remote player, slerp the full rotation from server state
+                            const remoteQuaternion = new THREE.Quaternion(remoteState.rotation.x, remoteState.rotation.y, remoteState.rotation.z, remoteState.rotation.w);
+                            remotePlayerRef.current.mesh.quaternion.slerp(remoteQuaternion, 0.3);
                         } else {
                             remotePlayerRef.current.mesh.visible = false;
                          }

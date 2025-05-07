@@ -217,7 +217,7 @@ function loadMapPhysics(mapId) {
         console.warn(`[Physics Load] No physicsData found for map ${mapId}. No map colliders will be created.`);
         return;
     }
-    console.log("[Physics Load] Found Physics Data:", JSON.stringify(physicsData, null, 2)); // Log the physics data
+   
 
     // --- Only support Trimesh Loading ---
     if (physicsData.vertices && physicsData.vertices.length > 0 && physicsData.indices && physicsData.indices.length > 0) {
