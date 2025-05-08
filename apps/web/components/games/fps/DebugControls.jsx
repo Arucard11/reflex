@@ -35,42 +35,6 @@ function DebugControls({
         }
         console.log('[DebugControls Setup Effect] Core objects seem valid.');
 
-        // --- Create OrbitControls ONCE if they don't exist ---
-        if (!orbitControlsRef.current) {
-            console.log("[DebugControls Setup Effect] OrbitControls instance doesn't exist. Attempting creation...");
-            const isRendererAttached = document.body.contains(renderer.domElement);
-            if (isRendererAttached) {
-                try {
-                    if (camera instanceof THREE.PerspectiveCamera && renderer.domElement instanceof HTMLElement) {
-                        orbitControlsRef.current = new OrbitControls(camera, renderer.domElement);
-                        orbitControlsRef.current.enableDamping = true;
-                        orbitControlsRef.current.dampingFactor = 0.05;
-                        orbitControlsRef.current.screenSpacePanning = true;
-                        orbitControlsRef.current.minDistance = 1;
-                        orbitControlsRef.current.maxDistance = 50;
-                        orbitControlsRef.current.enabled = isEnabled; // Initial state based on prop
-                        console.log(`[DebugControls Setup Effect] OrbitControls CREATED. Initial enabled state: ${isEnabled}`);
-                    } else {
-                        console.error('[DebugControls Setup Effect] Invalid camera or renderer element TYPE during OrbitControls creation.');
-                    }
-                } catch (error) {
-                    console.error('[DebugControls Setup Effect] Failed to CREATE OrbitControls:', error);
-                    // Log element state on error for diagnostics
-                    if(renderer?.domElement){
-                         console.error(`[DebugControls Error State] renderer.domElement exists: ${!!renderer.domElement}`);
-                         console.error(`[DebugControls Error State] document.body.contains(renderer.domElement): ${document.body.contains(renderer.domElement)}`);
-                    } else {
-                         console.error(`[DebugControls Error State] renderer.domElement is missing.`);
-                    }
-                    orbitControlsRef.current = null;
-                }
-            } else {
-                console.warn('[DebugControls Setup Effect] Renderer DOM element not attached to document body. Cannot create OrbitControls yet.');
-            }
-        } else {
-             console.log("[DebugControls Setup Effect] OrbitControls instance already exists.");
-        }
-
         // --- Create Debug Lines ONCE if they don't exist ---
         if (!linesRef.current) {
              console.log("[DebugControls Setup Effect] Debug lines don't exist. Creating...");
@@ -102,18 +66,57 @@ function DebugControls({
         };
     }, [camera, renderer, scene, rapierWorld]); // Dependencies: Only core objects for creation
 
-    // Effect 2: Manage Enabled state based on isEnabled prop
+    // Effect 2: Manage OrbitControls initialization and enabling based on isEnabled prop
     useEffect(() => {
         console.log('[DebugControls Enable Effect] Running. isEnabled:', isEnabled);
-        if (orbitControlsRef.current) {
-            console.log(`[DebugControls Enable Effect] Setting OrbitControls enabled to: ${isEnabled}`);
-            orbitControlsRef.current.enabled = isEnabled;
+        // Only attempt to create or enable OrbitControls if all required objects are valid and debug mode is enabled
+        if (isEnabled && camera && renderer?.domElement) {
+            // Check if the renderer's DOM element is attached to the document
+            if (!document.body.contains(renderer.domElement)) {
+                console.warn('[DebugControls Enable Effect] renderer.domElement is not attached to the DOM. Skipping OrbitControls creation.');
+            } else if (!orbitControlsRef.current) {
+                console.log("[DebugControls Enable Effect] OrbitControls instance doesn't exist. Attempting creation...");
+                try {
+                    if (camera instanceof THREE.PerspectiveCamera && renderer.domElement instanceof HTMLElement) {
+                        orbitControlsRef.current = new OrbitControls(camera, renderer.domElement);
+                        orbitControlsRef.current.enableDamping = true;
+                        orbitControlsRef.current.dampingFactor = 0.05;
+                        orbitControlsRef.current.screenSpacePanning = true;
+                        orbitControlsRef.current.minDistance = 1;
+                        orbitControlsRef.current.maxDistance = 50;
+                        orbitControlsRef.current.enabled = true;
+                        console.log(`[DebugControls Enable Effect] OrbitControls CREATED and enabled.`);
+                        // Ensure pointer lock is exited when debug mode is enabled
+                        if (document.pointerLockElement) {
+                            document.exitPointerLock();
+                            console.log('[DebugControls Enable Effect] Exited pointer lock for debug mode.');
+                        }
+                    } else {
+                        console.error('[DebugControls Enable Effect] Invalid camera or renderer element TYPE during OrbitControls creation.');
+                    }
+                } catch (error) {
+                    console.error('[DebugControls Enable Effect] Failed to CREATE OrbitControls:', error);
+                    orbitControlsRef.current = null;
+                }
+            } else {
+                console.log(`[DebugControls Enable Effect] Setting OrbitControls enabled to: true`);
+                orbitControlsRef.current.enabled = true;
+                // Ensure pointer lock is exited when debug mode is enabled
+                if (document.pointerLockElement) {
+                    document.exitPointerLock();
+                    console.log('[DebugControls Enable Effect] Exited pointer lock for debug mode.');
+                }
+            }
+        } else if (orbitControlsRef.current) {
+            console.log(`[DebugControls Enable Effect] Setting OrbitControls enabled to: false`);
+            orbitControlsRef.current.enabled = false;
         }
+
         if (linesRef.current) {
             console.log(`[DebugControls Enable Effect] Setting lines visible to: ${isEnabled}`);
             linesRef.current.visible = isEnabled;
         }
-    }, [isEnabled]); // Dependency: Only isEnabled prop
+    }, [isEnabled, camera, renderer]); // Dependency: Include camera and renderer for validation
 
     // Effect 3: Update Loop Management
     useEffect(() => {
@@ -165,7 +168,7 @@ function DebugControls({
                 animationFrameIdRef.current = null;
             }
         };
-    }, [isEnabled, rapierWorld]); // Dependencies: loop restarts if these change while enabled (Removed control/line refs as deps)
+    }, [isEnabled, rapierWorld]); // Dependencies: loop restarts if these change while enabled
 
     return null;
 }

@@ -33,6 +33,10 @@ const { initMetrics, gameMetrics } = require('./metrics');
 
 console.log('FPS Game Instance Starting...');
 
+// NEW: Player Physics Dimensions Constants
+const PLAYER_TOTAL_HEIGHT = 0.9; // New smaller height
+const PLAYER_RADIUS = 0.2;       // New smaller radius
+
 // --- Argument Parsing (Placeholder) ---
 // Will be populated by parseArguments function
 let config = {};
@@ -118,14 +122,14 @@ function parseArguments() {
         .option('port', { alias: 'p', type: 'number', demandOption: true, describe: 'Port to listen on' })
         .option('matchId', { type: 'string', demandOption: true, describe: 'Unique Match ID' })
         // NEW: Map Selection (Plan 1.2.1)
-        .option('mapId', { choices: Object.values(MapId), demandOption: true, describe: 'ID of the map to load' })
+        .option('mapId', { type: 'string', demandOption: true, describe: 'ID of the map to load' })
         // Player Info (Plan 1.2.1)
         .option('player1UserId', { type: 'string', demandOption: true })
         .option('player1Wallet', { type: 'string', demandOption: true })
-        .option('player1CharId', { choices: Object.values(CharacterId), demandOption: true, describe: 'Character ID for Player 1' })
+        .option('player1CharId', { type: 'string', demandOption: true, describe: 'Character ID for Player 1' })
         .option('player2UserId', { type: 'string', demandOption: true })
         .option('player2Wallet', { type: 'string', demandOption: true })
-        .option('player2CharId', { choices: Object.values(CharacterId), demandOption: true, describe: 'Character ID for Player 2' })
+        .option('player2CharId', { type: 'string', demandOption: true, describe: 'Character ID for Player 2' })
         // Other platform args (Existing)
         .option('betAmountLamports', { type: 'number', demandOption: true })
         .option('serverAuthorityKeyPath', { type: 'string', demandOption: true, describe: 'Path to server authority keypair file' })
@@ -142,10 +146,10 @@ function parseArguments() {
     config = {
         port: argv.port,
         matchId: argv.matchId,
-        mapId: argv.mapId,
+        mapId: MapId.MAP_1,
         playersInfo: {
-            p1: { userId: argv.player1UserId, wallet: argv.player1Wallet, charId: argv.player1CharId },
-            p2: { userId: argv.player2UserId, wallet: argv.player2Wallet, charId: argv.player2CharId }
+            p1: { userId: argv.player1UserId, wallet: argv.player1Wallet, charId: CharacterId.CHAR_A },
+            p2: { userId: argv.player2UserId, wallet: argv.player2Wallet, charId: CharacterId.CHAR_A }
         },
         betAmountLamports: argv.betAmountLamports,
         serverAuthorityKeyPath: argv.serverAuthorityKeyPath,
@@ -172,9 +176,8 @@ async function initRapier() {
 // Function to create player physics representation
 function createPlayerPhysicsBody(playerId, position) {
     console.log(`Creating physics body for ${playerId} at ${JSON.stringify(position)}`);
-    const playerHeight = 1.8;
-    const playerRadius = 0.4;
-    const capsuleHalfHeight = playerHeight / 2 - playerRadius;
+    // Use the new constants
+    const capsuleHalfHeight = PLAYER_TOTAL_HEIGHT / 2 - PLAYER_RADIUS;
 
     // Create RigidBody
     const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
@@ -185,7 +188,7 @@ function createPlayerPhysicsBody(playerId, position) {
     const body = rapierWorld.createRigidBody(bodyDesc);
 
     // Create Collider (Capsule)
-    const colliderDesc = RAPIER.ColliderDesc.capsule(capsuleHalfHeight, playerRadius)
+    const colliderDesc = RAPIER.ColliderDesc.capsule(capsuleHalfHeight, PLAYER_RADIUS)
         .setDensity(1.0)
         .setFriction(0.7)
         .setRestitution(0.2)
@@ -253,9 +256,9 @@ function initializePlayerStates() {
     const p2Info = config.playersInfo.p2;
 
     [p1Info, p2Info].forEach((playerInfo) => {
-        const charConfig = CHARACTER_CONFIG_FPS[playerInfo.charId];
+        const charConfig = CHARACTER_CONFIG_FPS[CharacterId.CHAR_A];
         if (!charConfig) {
-            throw new Error(`Character config not found for charId: ${playerInfo.charId}`);
+            throw new Error(`Character config not found for default charId: ${CharacterId.CHAR_A}`);
         }
         const defaultWeapon1 = 'rifle'; // Ensure this is a valid key in WEAPON_CONFIG_FPS
         const defaultWeapon2 = 'pistol'; // Ensure this is a valid key in WEAPON_CONFIG_FPS
@@ -263,7 +266,7 @@ function initializePlayerStates() {
         players[playerInfo.userId] = {
             userId: playerInfo.userId,
             wallet: playerInfo.wallet, // Store wallet for escrow later
-            characterId: playerInfo.charId,
+            characterId: CharacterId.CHAR_A,
             state: 'waiting', // Initial state before spawn
             position: { x: 0, y: 0, z: 0 }, // Will be set on spawn
             rotation: { x: 0, y: 0, z: 0, w: 1 }, // Placeholder, set on spawn/input
@@ -298,7 +301,7 @@ function initializePlayerStates() {
             isOnGround: false, // NEW: Track ground status for jumping/air control
             lastJumpTime: 0, // NEW: Prevent jump spam
         };
-        console.log(`Initialized state for ${playerInfo.userId} (Char: ${playerInfo.charId})`);
+        console.log(`Initialized state for ${playerInfo.userId} (Char: ${CharacterId.CHAR_A})`);
     });
 
     // Immediately spawn both players at their correct spawn points
@@ -1209,7 +1212,7 @@ function respawnPlayer(playerId) {
     console.log(`Respawning ${playerId} at index ${spawnIndex}: ${JSON.stringify(spawnPoint)}`);
 
     // Reset State using Character Config
-    const charConfig = CHARACTER_CONFIG_FPS[playerState.characterId];
+    const charConfig = CHARACTER_CONFIG_FPS[CharacterId.CHAR_A];
     playerState.state = 'alive';
     playerState.health = charConfig.baseHealth;
     playerState.shield = charConfig.baseShield; // Reset shield based on character
@@ -1256,7 +1259,16 @@ function respawnPlayer(playerId) {
 }
 
 // Helper function for resetting physics (Plan 3.2.1)
-    // ... existing code ...
+function resetPlayerPhysics(rapierBody, position) {
+    if (rapierBody) {
+        rapierBody.setTranslation(position, true);
+        rapierBody.setLinvel({ x: 0, y: 0, z: 0 }, true);
+        rapierBody.setAngvel({ x: 0, y: 0, z: 0 }, true);
+        rapierBody.setGravityScale(1, true);
+        rapierBody.wakeUp();
+    }
+}
+
 // --- Entry Point ---
 initialize().catch(err => {
     console.error("Initialization failed:", err);

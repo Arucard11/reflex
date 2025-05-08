@@ -20,6 +20,10 @@ import {
 } from '@shared-types/game-fps';
 import DebugControls from './DebugControls'; // Import DebugControls
 
+// NEW: Player Physics Dimensions Constants (must match server)
+const PLAYER_VISUAL_TOTAL_HEIGHT = 0.9; // New smaller height for visual alignment
+const PLAYER_VISUAL_RADIUS = 0.2;       // New smaller radius (used for client physics body)
+
 // Define props based on Universal Standard (II.1)
 function GameViewFPS({
     serverIp,
@@ -72,6 +76,7 @@ function GameViewFPS({
         lookQuat: { x: 0, y: 0, z: 0, w: 1 },
         sequence: 0,
         pendingInputs: [],
+        isAiming: false, // NEW: Track right mouse button state
     });
     const lastInputSendTimeRef = useRef(0);
     const INPUT_SEND_INTERVAL = 1000 / 30;
@@ -267,6 +272,18 @@ function GameViewFPS({
                 console.log('Pointer Unlocked (handlePointerLockChange)');
             }
         };
+
+        // NEW: Mouse Down/Up for Aiming
+        const handleMouseDown = (event) => {
+            if (event.button === 2) { // Right mouse button
+                inputStateRef.current.isAiming = true;
+            }
+        };
+        const handleMouseUp = (event) => {
+            if (event.button === 2) {
+                inputStateRef.current.isAiming = false;
+            }
+        };
         // >>> End Moved Input Handlers <<<
 
         // --- Animation Helper (Modified for FPV Target) ---
@@ -310,6 +327,14 @@ function GameViewFPS({
             try {
                 if (!isMounted) return;
                 console.log('Initializing Three.js, Rapier...');
+
+                // >>> ADD CONSOLE LOGS HERE <<<
+                console.log('[GameViewFPS Props] mapId:', mapId);
+                console.log('[GameViewFPS Props] localPlayerCharacterId:', localPlayerCharacterId);
+                console.log('[GameViewFPS Props] opponentPlayerCharacterId:', opponentPlayerCharacterId);
+                console.log('[GameViewFPS Available Configs] MAP_CONFIGS_FPS:', MAP_CONFIGS_FPS);
+                console.log('[GameViewFPS Available Configs] CHARACTER_CONFIG_FPS:', CHARACTER_CONFIG_FPS);
+
                 setIsLoading(true);
                 setConnectionStatus('initializing');
 
@@ -320,6 +345,9 @@ function GameViewFPS({
                 if (!mapConfig || !localCharConfig || !remoteCharConfig) {
                     throw new Error("Missing required map or character config on client!");
                 }
+                const localCharacterVisualYOffset = localCharConfig.visualYOffset || 0.0;
+                // We'll get the remote character's visualYOffset later when we have gameState
+
                 console.log("Configuration accessed."); // Log progress
 
                 // --- Asset Loaders ---
@@ -387,6 +415,16 @@ function GameViewFPS({
                 // Assign to refs
                 localPlayerRef.current.mesh = localCharacterGltf.scene;
                 remotePlayerRef.current.mesh = remoteCharacterGltf.scene;
+
+                // Log all animation names for the local character model
+                if (localCharacterGltf.animations && localCharacterGltf.animations.length > 0) {
+                    console.log('Character Model Animations:');
+                    localCharacterGltf.animations.forEach((clip, idx) => {
+                        console.log(`  [${idx}] ${clip.name}`);
+                    });
+                } else {
+                    console.warn('No animations found in the loaded character model!');
+                }
 
                 playerAnimationActionsRef.current = {}; // Use ref
                 localCharacterGltf.animations.forEach(clip => {
@@ -542,6 +580,8 @@ function GameViewFPS({
                 document.addEventListener('keydown', handleKeyDown, { signal: abortController.signal });
                 document.addEventListener('keyup', handleKeyUp, { signal: abortController.signal });
                 document.addEventListener('mousemove', handleMouseMove, { signal: abortController.signal });
+                document.addEventListener('mousedown', handleMouseDown, { signal: abortController.signal }); // NEW
+                document.addEventListener('mouseup', handleMouseUp, { signal: abortController.signal });     // NEW
 
                 // --- Setup Pointer Lock Listener (ASAP for FPS input) ---
                 if (canvasElement) { // Ensure canvasElement exists
@@ -552,10 +592,9 @@ function GameViewFPS({
                     }, { once: true });
 
                     const pointerLockClickListener = () => {
-                         // >>> ADDED LOG <<<
-                        console.log('[PointerLock] Canvas clicked.');
-                        if (!document.pointerLockElement) {
-                             // >>> ADDED LOG <<<
+                        // Only request pointer lock if NOT in debug/orbital mode
+                        if (!isDebugModeEnabled && !document.pointerLockElement) {
+                            // >>> ADDED LOG <<<
                             console.log('[PointerLock] Attempting to request pointer lock...');
                             if (typeof canvasElement.requestPointerLock === 'function') {
                                 canvasElement.requestPointerLock(); // No .catch(), synchronous in most browsers
@@ -565,6 +604,8 @@ function GameViewFPS({
                             } else {
                                 console.error('[PointerLock] Error: canvasElement.requestPointerLock is not a function!');
                             }
+                        } else if (isDebugModeEnabled) {
+                            console.log('[PointerLock] Debug mode active, not requesting pointer lock.');
                         } else {
                             // >>> ADDED LOG <<<
                             console.log('[PointerLock] Pointer already locked.');
@@ -579,7 +620,7 @@ function GameViewFPS({
                 // --- Render Loop ---
                 let lastTimestamp = performance.now();
                 const clock = new THREE.Clock(); // Use Clock for mixer updates
-                const thirdPersonOffset = new THREE.Vector3(0, 2, -4); // Camera offset behind player
+                const thirdPersonOffset = new THREE.Vector3(0, 2, -2); // Camera offset behind player (changed from -4 to -2)
                 const tempPlayerPos = new THREE.Vector3(); // Temporary vectors for calculations
                 const tempCameraPos = new THREE.Vector3();
                 const tempLookAt = new THREE.Vector3();
@@ -640,32 +681,34 @@ function GameViewFPS({
                     localPlayerRef.current.mixer?.update(mixerDeltaTime);
                     remotePlayerRef.current.mixer?.update(mixerDeltaTime);
 
-                    // --- Update FPV Mixers & Animation ---
-                    let activeWeaponId = null;
-                    let activeFpvMixer = null;
-                    if (localState && localState.weaponSlots && localState.activeWeaponSlot !== undefined) {
-                        activeWeaponId = localState.weaponSlots[localState.activeWeaponSlot];
-                        const activeWeaponData = fpvElementsRef.current.weaponModels[activeWeaponId];
-                        if (activeWeaponData?.mixer) {
-                            activeFpvMixer = activeWeaponData.mixer;
-                            activeFpvMixer.update(mixerDeltaTime); // Update the active FPV mixer
-
-                            // --- Determine and Play FPV Animation ---
-                            const keys = inputStateRef.current.keys;
-                            const isMoving = keys.W || keys.A || keys.S || keys.D;
-                            const isRunning = isMoving && keys.Shift; // Check Shift key for running
-
-                            let targetAnimation = 'Rig|KDW_DPose_Idle'; // Default to Idle
-
-                            if (isRunning) {
-                                targetAnimation = 'Rig|KDW_Run';
-                            } else if (isMoving) {
-                                targetAnimation = 'Rig|KDW_Walk';
+                    // --- Character Animation Logic (Idle/Aim Idle) ---
+                    if (localPlayerRef.current.mixer && playerAnimationActionsRef.current) {
+                        const keys = inputStateRef.current.keys;
+                        const isMoving = keys.W || keys.A || keys.S || keys.D;
+                        const isAiming = inputStateRef.current.isAiming;
+                        let targetAnim = null;
+                        if (isAiming) {
+                            targetAnim = 'aim idle';
+                        } else if (!isMoving) {
+                            targetAnim = 'idle';
+                        } else {
+                            targetAnim = null; // Let movement logic handle walk/run/strafe, etc.
+                        }
+                        if (targetAnim) {
+                            const mixer = localPlayerRef.current.mixer;
+                            const actions = playerAnimationActionsRef.current;
+                            const newAction = actions[targetAnim] ? mixer.clipAction(actions[targetAnim]) : null;
+                            const prevAction = currentPlayerActionRef.current;
+                            if (newAction && prevAction !== newAction) {
+                                if (prevAction) {
+                                    prevAction.fadeOut(0.2);
+                                }
+                                newAction.reset().setEffectiveTimeScale(1).setEffectiveWeight(1).fadeIn(0.2).play();
+                                newAction.loop = THREE.LoopRepeat;
+                                currentPlayerActionRef.current = newAction;
                             }
-                            // TODO: Add conditions for Reload, Fire, Switch Weapon animations later
-
-                            playFpvAnimation(activeWeaponId, targetAnimation, true); // Play the determined animation (looping)
-
+                        } else {
+                            // If moving, let other movement animation logic take over (not handled here)
                         }
                     }
 
@@ -690,38 +733,23 @@ function GameViewFPS({
                         localPlayerRef.current.mesh.visible = cameraModeRef.current.isThirdPerson;
                         // NEW: Update mesh from predicted Rapier body state
                         if (localPlayerRef.current.rapierBody) {
-                            // Define capsule dimensions (must match server/client creation)
-                            const playerHeight = 1.8; // The total height of your capsule
-                            // const playerRadius = 0.4; // The radius of your capsule (not directly needed for this offset calc)
-                            
-                            // For positioning the visual model, we care about the total half-height from the capsule's center to its bottom.
-                            const totalCapsuleHalfHeight = playerHeight / 2;
+                            const totalCapsuleHalfHeightForVisuals = PLAYER_VISUAL_TOTAL_HEIGHT / 2;
 
-                            const predictedPos = localPlayerRef.current.rapierBody.translation(); // Center of capsule
-                            const predictedRot = localPlayerRef.current.rapierBody.rotation(); // Rapier returns {x,y,z,w}
-                            // >>> ADDED LOG <<<
-                            // console.log(`[Predict] Syncing Mesh: Body Pos=(${predictedPos.x.toFixed(2)}, ${predictedPos.y.toFixed(2)}, ${predictedPos.z.toFixed(2)})`);
+                            const predictedPos = localPlayerRef.current.rapierBody.translation(); 
+                            const predictedRot = localPlayerRef.current.rapierBody.rotation(); 
                             
-                            // Position the model's pivot (assumed to be at its feet)
-                            // at the bottom of the physics capsule.
                             localPlayerRef.current.mesh.position.set(
                                 predictedPos.x,
-                                predictedPos.y - totalCapsuleHalfHeight, // Move model down by half the capsule's total height
+                                predictedPos.y - totalCapsuleHalfHeightForVisuals + localCharacterVisualYOffset, 
                                 predictedPos.z
                             );
-                            // >>> ADDED LOG <<<
-                            // console.log(`[Predict] Syncing Mesh: Mesh Pos=(${localPlayerRef.current.mesh.position.x.toFixed(2)}, ${localPlayerRef.current.mesh.position.y.toFixed(2)}, ${localPlayerRef.current.mesh.position.z.toFixed(2)})`);
-                            // Don't directly set mesh rotation from body if using third person lookAt
+                            
                             if (!cameraModeRef.current.isThirdPerson) {
-                                // In first person, mesh (usually hidden) should match body rotation
                                 localPlayerRef.current.mesh.quaternion.set(predictedRot.x, predictedRot.y, predictedRot.z, predictedRot.w);
                             } else {
-                                // In third person, the body's rotation (which includes pitch from looking up/down if not locked)
-                                // might not be what you want for the visual model if the camera also controls pitch.
-                                // Often, you only apply the YAW rotation to the model.
                                 const bodyQuaternion = new THREE.Quaternion(predictedRot.x, predictedRot.y, predictedRot.z, predictedRot.w);
                                 const euler = new THREE.Euler().setFromQuaternion(bodyQuaternion, 'YXZ');
-                                localPlayerRef.current.mesh.rotation.y = euler.y; // Apply only yaw
+                                localPlayerRef.current.mesh.rotation.y = euler.y; 
                             }
                         } else if (localState && localState.position && localState.rotation) {
                             // Fallback to lerping server state if body missing (e.g., before spawn)
@@ -732,20 +760,20 @@ function GameViewFPS({
                     if (remotePlayerRef.current.mesh) {
                          const remoteState = gameStateRef.current?.players?.[opponentPlayerId];
                          if (remoteState && remoteState.position && remoteState.rotation) {
-                            remotePlayerRef.current.mesh.visible = true; // Show remote player always
-                            // NEW: Calculate offset like local player
-                            const playerHeight = 1.8; // Assume same height
-                            // const playerRadius = 0.4;
-                            const totalCapsuleHalfHeight = playerHeight / 2;
-                            // const visualMeshOffsetY = 0; // Assuming pivot at feet
+                            remotePlayerRef.current.mesh.visible = true; 
+                            const totalCapsuleHalfHeightForVisuals = PLAYER_VISUAL_TOTAL_HEIGHT / 2;
+                            
+                            const opponentActualCharId = remoteState.characterId; // Get the opponent's actual characterId from gameState
+                            const opponentCharConfig = CHARACTER_CONFIG_FPS[opponentActualCharId];
+                            const remoteCharacterVisualYOffset = opponentCharConfig?.visualYOffset || 0.0;
+
                             const targetPosition = new THREE.Vector3(
                                 remoteState.position.x,
-                                remoteState.position.y - totalCapsuleHalfHeight, // Apply offset
+                                remoteState.position.y - totalCapsuleHalfHeightForVisuals + remoteCharacterVisualYOffset, 
                                 remoteState.position.z
                             );
-                            remotePlayerRef.current.mesh.position.lerp(targetPosition, 0.3); // Lerp to the adjusted target
-                            // END NEW
-                            // For remote player, slerp the full rotation from server state
+                            remotePlayerRef.current.mesh.position.lerp(targetPosition, 0.3); 
+                            
                             const remoteQuaternion = new THREE.Quaternion(remoteState.rotation.x, remoteState.rotation.y, remoteState.rotation.z, remoteState.rotation.w);
                             remotePlayerRef.current.mesh.quaternion.slerp(remoteQuaternion, 0.3);
                         } else {
@@ -787,7 +815,9 @@ function GameViewFPS({
                              // Note: First-person camera rotation is directly handled by handleMouseMove
                         }
                     } else {
-                        // Orbital mode is active - DO NOTHING here, let DebugControls handle it.
+                        // Orbital mode is active - DO NOTHING here, let DebugControls handle it completely.
+                        // Prevent any game logic from updating camera position or rotation.
+                        console.log('[Debug Mode] Orbital camera active, game camera updates disabled.');
                     }
 
                     // Render Scene
@@ -824,9 +854,10 @@ function GameViewFPS({
                        const initialClientPos = {x:0, y:1, z:0};
                        const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
                          .setTranslation(initialClientPos.x, initialClientPos.y, initialClientPos.z)
-                         .setCanSleep(false).setCcdEnabled(true); // Removed .lockRotations()
+                         .setCanSleep(false).setCcdEnabled(true)
+                         .lockRotations(); // Ensure rotations are locked for the client-side body
                        const body = rapierWorldRef.current.createRigidBody(bodyDesc);
-                       const playerHeight = 1.8; const playerRadius = 0.4;
+                       const playerHeight = PLAYER_VISUAL_TOTAL_HEIGHT; const playerRadius = PLAYER_VISUAL_RADIUS;
                        const colliderDesc = RAPIER.ColliderDesc.capsule(playerHeight / 2 - playerRadius, playerRadius);
                        // Apply properties after creation
                        colliderDesc.setDensity(1.0);
@@ -1001,6 +1032,8 @@ function GameViewFPS({
             document.removeEventListener('keyup', handleKeyUp);
             document.removeEventListener('mousemove', handleMouseMove);
             document.removeEventListener('pointerlockchange', handlePointerLockChange);
+            document.removeEventListener('mousedown', handleMouseDown);
+            document.removeEventListener('mouseup', handleMouseUp);
             if (document.pointerLockElement === canvasElement) {
                  document.exitPointerLock(); // Release lock on unmount
             }

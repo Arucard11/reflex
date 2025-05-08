@@ -21,14 +21,14 @@ export const AbilityType = { // Example types
 
 export const CharacterId = {
     CHAR_A: 'charA',
-    CHAR_B: 'charB',
-    CHAR_C: 'charC',
+    // CHAR_B: 'charB', // Removed
+    // CHAR_C: 'charC', // Removed
 };
 
 export const MapId = {
     MAP_1: 'map1',
-    MAP_2: 'map2',
-    MAP_3: 'map3',
+    // MAP_2: 'map2', // Removed
+    // MAP_3: 'map3', // Removed
 };
 
 // --- NEW: Physics Collision Groups ---
@@ -122,12 +122,13 @@ export const ABILITY_CONFIG_FPS = { // Example ability details
  * @property {number} baseShield
  * @property {AbilityType | null} ability1 - Which ability they have
  * @property {string} modelPath - NEW: Path to the character's visual GLB model
+ * @property {number} [visualYOffset] - Optional Y-offset for visual model alignment (positive values move model up)
  * // Add properties for visual variations if needed (e.g., texture paths)
  */
 export const CHARACTER_CONFIG_FPS = {
-    [CharacterId.CHAR_A]: { id: CharacterId.CHAR_A, baseHealth: 100, baseShield: 50, ability1: AbilityType.DASH, modelPath: '/assets/fps_1v1/models/robocop.glb' }, // Updated path to assets
-    [CharacterId.CHAR_B]: { id: CharacterId.CHAR_B, baseHealth: 75, baseShield: 75, ability1: AbilityType.HEAL_BURST, modelPath: '/assets/fps_1v1/models/soldier.glb' }, // Updated path to assets
-    [CharacterId.CHAR_C]: { id: CharacterId.CHAR_C, baseHealth: 125, baseShield: 25, ability1: AbilityType.DAMAGE_AMP, modelPath: '/assets/fps_1v1/models/robot.glb' }, // Updated path to assets
+    [CharacterId.CHAR_A]: { id: CharacterId.CHAR_A, baseHealth: 100, baseShield: 50, ability1: AbilityType.DASH, modelPath: '/assets/fps_1v1/models/soldier.glb', visualYOffset: 0.0 }, // Updated path to assets, Added visualYOffset. visualYOffset assumes model pivot is at its geometric center.
+    // [CharacterId.CHAR_B]: { id: CharacterId.CHAR_B, baseHealth: 75, baseShield: 75, ability1: AbilityType.HEAL_BURST, modelPath: '/assets/fps_1v1/models/soldier.glb', visualYOffset: 0.0 }, // Removed
+    // [CharacterId.CHAR_C]: { id: CharacterId.CHAR_C, baseHealth: 125, baseShield: 25, ability1: AbilityType.DAMAGE_AMP, modelPath: '/assets/fps_1v1/models/soldier.glb', visualYOffset: 0.0 }, // Removed
 };
 
 /**
@@ -151,24 +152,24 @@ export const MAP_CONFIGS_FPS = {
             // Use extracted trimesh data
             vertices: map1Vertices,
             indices: map1Indices,
-            spawnPoints: [{ x: 3, y:6, z: -7 }, { x: 10, y: 15, z: 8 }],
+            spawnPoints: [{ x: 3, y:6, z: -7 }, { x: -3, y: -6, z: 7 }],
         }
     },
-    [MapId.MAP_2]: {
-        id: MapId.MAP_2, name: 'Map 2', visualAssetPath: '/assets/fps_1v1/models/map2.glb',
-        physicsData: {
-            vertices: map2Vertices,
-            indices: map2Indices,
-            spawnPoints: [{ x: 0, y: 1, z: -10 }, { x: 0, y: 1, z: 10 }],
-        }
-    },
-    [MapId.MAP_3]: {
-        id: MapId.MAP_3, name: 'Map 3', visualAssetPath: '/assets/fps_1v1/models/map3.glb',
-        // Map 3: No trimesh data available, leave vertices/indices undefined (physics loading will fail)
-        physicsData: {
-            spawnPoints: [{ x: -15, y: 1, z: 0 }, { x: 15, y: 1, z: 0 }]
-        }
-    },
+    // [MapId.MAP_2]: { // Removed
+    //     id: MapId.MAP_2, name: 'Map 2', visualAssetPath: '/assets/fps_1v1/models/map2.glb',
+    //     physicsData: {
+    //         vertices: map2Vertices,
+    //         indices: map2Indices,
+    //         spawnPoints: [{ x: 0, y: 1, z: -10 }, { x: 0, y: 1, z: 10 }],
+    //     }
+    // },
+    // [MapId.MAP_3]: { // Removed
+    //     id: MapId.MAP_3, name: 'Map 3', visualAssetPath: '/assets/fps_1v1/models/map3.glb',
+    //     // Map 3: No trimesh data available, leave vertices/indices undefined (physics loading will fail)
+    //     physicsData: {
+    //         spawnPoints: [{ x: -15, y: 1, z: 0 }, { x: 15, y: 1, z: 0 }]
+    //     }
+    // },
 };
 
 // --- Network Message Payloads & State ---

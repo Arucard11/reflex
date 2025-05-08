@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import GameViewFPS from '../components/games/fps/GameViewFPS'; // Corrected path
+import { CharacterId, MapId } from '@shared-types/game-fps'; // Corrected import path
 
 // --- TEMPORARY Placeholder Match Data & Role Simulation ---
 const getTestMatchData = (matchId) => {
@@ -85,7 +86,16 @@ export default function TestFpsPage() {
             <p style={{fontSize: '0.8em', color: '#aaa'}}>
                 (To test as Player 2, open browser console and run: localStorage.setItem('forcePlayer2', 'true'); then reload. Run localStorage.removeItem('forcePlayer2'); to revert to Player 1.)
             </p>
-            <GameViewFPS {...gameProps} />
+            <GameViewFPS
+                serverIp={gameProps.serverIp}
+                serverPort={gameProps.serverPort}
+                matchId={gameProps.matchId}
+                localPlayerUserId={gameProps.localPlayerUserId}
+                opponentPlayerId={gameProps.opponentPlayerId}
+                localPlayerCharacterId={CharacterId.CHAR_A}
+                opponentPlayerCharacterId={CharacterId.CHAR_A}
+                mapId={MapId.MAP_1}
+            />
         </div>
     );
 } 

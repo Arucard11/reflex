@@ -18,9 +18,9 @@ PORT=3001
 MATCH_ID="test-match-$(date +%s)" # Unique ID using timestamp
 MAP_ID="map1" # Example map
 PLAYER1_USERID="player1_test"
-PLAYER1_CHARID="charB"       # Example char
+PLAYER1_CHARID="charA"       # Changed to charA
 PLAYER2_USERID="player2_test"
-PLAYER2_CHARID="charB"       # Example char
+PLAYER2_CHARID="charA"       # Changed to charA
 BET_LAMPORTS=1000000
 
 # Solana RPC URL (Using Devnet)
