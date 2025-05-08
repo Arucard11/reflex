@@ -2,15 +2,12 @@
 const yargs = require('yargs/yargs');
 const { hideBin } = require('yargs/helpers');
 
-const { register, tickDurationHist } = require('./metrics.js');
-
 // Import Core Server Dependencies
 const RAPIER = require('@dimforge/rapier3d-compat');
 const { Server } = require("socket.io");
 const http = require('http');
 const fs = require('fs'); // For loading map data/keypair later
 // NEW: Import express for metrics server
-const express = require('express');
 const { performance } = require('perf_hooks'); // For precise timing
 
 // Import necessary config and types
@@ -29,7 +26,6 @@ const { performance } = require('perf_hooks'); // For precise timing
 //     CollisionGroup,
 //     interactionGroups
 // } = require('@shared-types/game-fps');
-const { initMetrics, gameMetrics } = require('./metrics');
 
 console.log('FPS Game Instance Starting...');
 
@@ -304,9 +300,7 @@ function initializePlayerStates() {
         console.log(`Initialized state for ${playerInfo.userId} (Char: ${CharacterId.CHAR_A})`);
     });
 
-    // Immediately spawn both players at their correct spawn points
-    respawnPlayer(p1Info.userId);
-    respawnPlayer(p2Info.userId);
+   
 }
 
 // Step 5: Initialize Socket.IO (1.2.2 / 1.3.2)
@@ -751,17 +745,8 @@ async function signalReadyToPlatform() {
         const httpServer = io.httpServer; // Access the http server instance from socket.io
 
         // --- Metrics Server ---
-        const metricsApp = express();
-        metricsApp.get('/metrics', async (req, res) => {
-            res.set('Content-Type', register.contentType);
-            res.end(await register.metrics());
-        });
-        const metricsPort = config.port + 1; // Use adjacent port
-        const metricsServer = metricsApp.listen(metricsPort, () => {
-            console.log(`Metrics server listening on port ${metricsPort}`);
-        });
+        // (Removed)
         // --- End Metrics Server ---
-
 
         httpServer.listen(config.port, () => {
             console.log(`Game server listening on port ${config.port}`);
@@ -772,8 +757,8 @@ async function signalReadyToPlatform() {
                 const readyMessage = {
                     type: 'READY',
                     serverId: config.matchId,
-                    port: config.port,
-                    metricsPort: metricsPort // Inform manager about metrics port
+                    port: config.port
+                    // metricsPort: metricsPort // (Removed)
                 };
                 try {
                     process.send(readyMessage);
@@ -862,9 +847,9 @@ function startGameLoop() {
         // 3. Broadcast Game State
         broadcastGameState();
 
-        // Record tick duration for metrics
-        const tickEnd = performance.now();
-        tickDurationHist.observe(tickEnd - tickStart);
+        // Record tick duration for metrics (REMOVED)
+        // const tickEnd = performance.now();
+        // tickDurationHist.observe(tickEnd - tickStart);
 
     }, TICK_INTERVAL_MS);
 }
