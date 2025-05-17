@@ -152,7 +152,10 @@ export const MAP_CONFIGS_FPS = {
             // Use extracted trimesh data
             vertices: map1Vertices,
             indices: map1Indices,
-            spawnPoints: [{ x: 3, y:6, z: -7 }, { x: -3, y: -6, z: 7 }],
+            spawnPoints: [
+                { x: 3, y: 6, z: -7 }, // Player 1 spawn
+                { x: -3, y: 6, z: 7 }  // Player 2 spawn (Y changed from -6 to 6)
+            ],
         }
     },
     // [MapId.MAP_2]: { // Removed

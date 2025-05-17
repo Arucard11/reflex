@@ -681,34 +681,42 @@ function GameViewFPS({
                     localPlayerRef.current.mixer?.update(mixerDeltaTime);
                     remotePlayerRef.current.mixer?.update(mixerDeltaTime);
 
-                    // --- Character Animation Logic (Idle/Aim Idle) ---
+                    // --- Character Animation Logic (Movement Animations) ---
                     if (localPlayerRef.current.mixer && playerAnimationActionsRef.current) {
                         const keys = inputStateRef.current.keys;
-                        const isMoving = keys.W || keys.A || keys.S || keys.D;
-                        const isAiming = inputStateRef.current.isAiming;
                         let targetAnim = null;
-                        if (isAiming) {
-                            targetAnim = 'aim idle';
-                        } else if (!isMoving) {
+
+                        if (keys.W && keys.Shift) {
+                            targetAnim = 'rifle run forward';
+                        } else if (keys.W) {
+                            targetAnim = 'walk';
+                        } else if (keys.S) {
+                            targetAnim = 'walking backwards';
+                        } else if (keys.A) {
+                            targetAnim = 'strafe left';
+                        } else if (keys.D) {
+                            targetAnim = 'strafe right';
+                        } else {
                             targetAnim = 'idle';
-                        } else {
-                            targetAnim = null; // Let movement logic handle walk/run/strafe, etc.
                         }
-                        if (targetAnim) {
-                            const mixer = localPlayerRef.current.mixer;
-                            const actions = playerAnimationActionsRef.current;
-                            const newAction = actions[targetAnim] ? mixer.clipAction(actions[targetAnim]) : null;
-                            const prevAction = currentPlayerActionRef.current;
-                            if (newAction && prevAction !== newAction) {
-                                if (prevAction) {
-                                    prevAction.fadeOut(0.2);
-                                }
-                                newAction.reset().setEffectiveTimeScale(1).setEffectiveWeight(1).fadeIn(0.2).play();
-                                newAction.loop = THREE.LoopRepeat;
-                                currentPlayerActionRef.current = newAction;
+
+                        // Optionally, override with aim idle if aiming
+                        // if (inputStateRef.current.isAiming && playerAnimationActionsRef.current['aim idle']) {
+                        //     targetAnim = 'aim idle';
+                        // }
+
+                        const mixer = localPlayerRef.current.mixer;
+                        const actions = playerAnimationActionsRef.current;
+                        const newAction = actions[targetAnim] ? mixer.clipAction(actions[targetAnim]) : null;
+                        const prevAction = currentPlayerActionRef.current;
+
+                        if (newAction && prevAction !== newAction) {
+                            if (prevAction) {
+                                prevAction.fadeOut(0.2);
                             }
-                        } else {
-                            // If moving, let other movement animation logic take over (not handled here)
+                            newAction.reset().setEffectiveTimeScale(1).setEffectiveWeight(1).fadeIn(0.2).play();
+                            newAction.loop = THREE.LoopRepeat;
+                            currentPlayerActionRef.current = newAction;
                         }
                     }
 
