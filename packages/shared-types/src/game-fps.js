@@ -43,6 +43,7 @@ export const CollisionGroup = {
     PLAYER_HITBOX: 1 << 2,// Separate hitboxes for damage
     GRENADE: 1 << 3,      // Thrown grenades
     PROJECTILE: 1 << 4,   // Bullets, if modeled as objects (currently raycast)
+    PLAYER_UTILITY_RAY: 1 << 5, // NEW: For player's internal raycasts like ground checks
     // ... add more as needed (e.g., vehicles, interactables)
 
     // Interaction Masks (combinations)

@@ -1,0 +1,32 @@
+[
+  {
+    "name": "material_0",
+    "baseColorFactor": [
+      1,
+      1,
+      1,
+      1
+    ],
+    "emissiveFactor": [
+      0,
+      0,
+      0
+    ],
+    "textures": {}
+  },
+  {
+    "name": "material_1",
+    "baseColorFactor": [
+      1,
+      1,
+      1,
+      1
+    ],
+    "emissiveFactor": [
+      0,
+      0,
+      0
+    ],
+    "textures": {}
+  }
+]

@@ -78,6 +78,12 @@ function DebugControls({
                 console.log("[DebugControls Enable Effect] OrbitControls instance doesn't exist. Attempting creation...");
                 try {
                     if (camera instanceof THREE.PerspectiveCamera && renderer.domElement instanceof HTMLElement) {
+                        // Additional check for canvas size
+                        if (renderer.domElement.clientWidth === 0 || renderer.domElement.clientHeight === 0) {
+                            console.warn('[DebugControls Enable Effect] renderer.domElement has zero width or height. Skipping OrbitControls creation.');
+                            return; // Exit if canvas size is zero, effectively stopping this attempt
+                        }
+
                         orbitControlsRef.current = new OrbitControls(camera, renderer.domElement);
                         orbitControlsRef.current.enableDamping = true;
                         orbitControlsRef.current.dampingFactor = 0.05;
@@ -95,8 +101,9 @@ function DebugControls({
                         console.error('[DebugControls Enable Effect] Invalid camera or renderer element TYPE during OrbitControls creation.');
                     }
                 } catch (error) {
-                    console.error('[DebugControls Enable Effect] Failed to CREATE OrbitControls:', error);
-                    orbitControlsRef.current = null;
+                    console.error('[DebugControls Enable Effect] FAILED to CREATE OrbitControls:', error);
+                    // orbitControlsRef.current remains null, allowing a retry if props change and effect re-runs.
+                    // This prevents the application from crashing.
                 }
             } else {
                 console.log(`[DebugControls Enable Effect] Setting OrbitControls enabled to: true`);

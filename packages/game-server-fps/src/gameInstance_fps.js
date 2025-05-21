@@ -180,12 +180,13 @@ function createPlayerPhysicsBody(playerId, position) {
         .setTranslation(position.x, position.y, position.z)
         .setCanSleep(false)
         .setCcdEnabled(true)
-        .lockRotations(); // Prevent capsule from falling over
+        .lockRotations() // Prevent capsule from falling over
+        .setLinearDamping(0.5); // NEW: Add linear damping
     const body = rapierWorld.createRigidBody(bodyDesc);
 
     // Create Collider (Capsule)
     const colliderDesc = RAPIER.ColliderDesc.capsule(capsuleHalfHeight, PLAYER_RADIUS)
-        .setDensity(1.0)
+        .setDensity(700.0) // NEW: Significantly increased density
         .setFriction(0.7)
         .setRestitution(0.2)
         // NEW: Set Collision Groups
@@ -229,7 +230,7 @@ function loadMapPhysics(mapId) {
             // Set Collision Groups for trimesh map geometry
             const groups = interactionGroups(
                 CollisionGroup.WORLD, // Belongs to WORLD group
-                [CollisionGroup.PLAYER_BODY, CollisionGroup.GRENADE, CollisionGroup.PROJECTILE] // Collides with Players, Grenades, Projectiles
+                [CollisionGroup.PLAYER_BODY, CollisionGroup.GRENADE, CollisionGroup.PROJECTILE, CollisionGroup.PLAYER_UTILITY_RAY] // Collides with Players, Grenades, Projectiles, AND UTILITY RAYS
             );
             trimeshDesc.setCollisionGroups(groups);
             console.log(`[Physics Load] Trimesh Set collision groups to:`, groups);
@@ -799,10 +800,28 @@ function startGameLoop() {
     gameLoopInterval = setInterval(() => {
         const tickStart = performance.now();
 
+        // Log pre-physics step velocities for alive players
+        for (const playerId in players) {
+            const playerState = players[playerId];
+            if (playerState.state === 'alive' && playerState.rapierBody) {
+                const vel = playerState.rapierBody.linvel();
+                console.log(`[Pre-Physics] ${playerId} Vel: x:${vel.x.toFixed(2)}, y:${vel.y.toFixed(2)}, z:${vel.z.toFixed(2)}`);
+            }
+        }
+
         // 1. Step Physics World
         if (rapierWorld) {
             rapierWorld.step();
             // TODO: Process collision events here (for ground checks, semtex stick, etc.)
+        }
+
+        // Log post-physics step velocities for alive players
+        for (const playerId in players) {
+            const playerState = players[playerId];
+            if (playerState.state === 'alive' && playerState.rapierBody) {
+                const vel = playerState.rapierBody.linvel();
+                console.log(`[Post-Physics] ${playerId} Vel: x:${vel.x.toFixed(2)}, y:${vel.y.toFixed(2)}, z:${vel.z.toFixed(2)}`);
+            }
         }
 
         // 2. Update Player States from Physics & Handle Game Logic
@@ -982,7 +1001,7 @@ function handlePlayerInput(playerId, inputData) {
     // Speed validation (allow higher if dash/grapple active)
     const currentLinvel = playerState.rapierBody.linvel();
     let allowedMaxSpeed = MAX_PLAYER_SPEED;
-    if (playerState.ability1Type === ABILITY_CONFIG_FPS.DASH && playerState.ability1CooldownRemaining > 0) allowedMaxSpeed *= 1.5;
+    if (playerState.ability1Type === ABILITY_CONFIG_FPS.DASH && playerState.ability1CooldownRemaining > ABILITY_CONFIG_FPS[ABILITY_CONFIG_FPS.DASH].cooldown - 1000) allowedMaxSpeed *= 1.5;
     if (playerState.grappleState.active) allowedMaxSpeed *= 2.0;
     const currentSpeed = Math.sqrt(currentLinvel.x**2 + currentLinvel.y**2 + currentLinvel.z**2);
     if (currentSpeed > allowedMaxSpeed) {
@@ -998,22 +1017,27 @@ function applyMovementInputToPlayer(playerId, playerBody, keys, lookQuat, deltaT
     const playerState = players[playerId];
     const isOnGround = playerState.isOnGround;
     const canJump = isOnGround && (Date.now() - playerState.lastJumpTime > 300);
+
     // Calculate desired movement
     let desiredVelocity = { x: 0, z: 0 };
     let moveDirection = { x: 0, z: 0 };
     let isMoving = false;
+
     // Yaw-only quaternion for ground movement
     const yawQuaternion = { x:0, y: lookQuat.y, z: 0, w: lookQuat.w };
     const yawMag = Math.sqrt(yawQuaternion.y**2 + yawQuaternion.w**2);
     if (yawMag > 1e-6) { yawQuaternion.y /= yawMag; yawQuaternion.w /= yawMag; } else { yawQuaternion.w = 1.0; }
+
     const _forward = {x: 0, y: 0, z: -1};
     const _right = {x: 1, y: 0, z: 0};
     const forward = applyQuaternion(_forward, yawQuaternion);
     const right = applyQuaternion(_right, yawQuaternion);
+
     if (keys.W) { moveDirection.x += forward.x; moveDirection.z += forward.z; isMoving = true; }
     if (keys.S) { moveDirection.x -= forward.x; moveDirection.z -= forward.z; isMoving = true; }
     if (keys.A) { moveDirection.x -= right.x; moveDirection.z -= right.z; isMoving = true; }
     if (keys.D) { moveDirection.x += right.x; moveDirection.z += right.z; isMoving = true; }
+
     if (isMoving) {
         const mag = Math.sqrt(moveDirection.x**2 + moveDirection.z**2);
         if (mag > 1e-6) { moveDirection.x /= mag; moveDirection.z /= mag; }
@@ -1021,20 +1045,31 @@ function applyMovementInputToPlayer(playerId, playerBody, keys, lookQuat, deltaT
         desiredVelocity.x = moveDirection.x * targetSpeed;
         desiredVelocity.z = moveDirection.z * targetSpeed;
     }
+
     // Apply force
     const currentLinvel = playerBody.linvel();
     let force = { x: 0, y: 0, z: 0 };
     const velocityDiffX = desiredVelocity.x - currentLinvel.x;
     const velocityDiffZ = desiredVelocity.z - currentLinvel.z;
+
     force.x = velocityDiffX * ACCELERATION_FORCE * deltaTime;
     force.z = velocityDiffZ * ACCELERATION_FORCE * deltaTime;
+
     if (!isOnGround) { force.x *= AIR_CONTROL_FACTOR; force.z *= AIR_CONTROL_FACTOR; }
+
     const forceMagnitude = Math.sqrt(force.x**2 + force.z**2);
     if (forceMagnitude > MAX_ACCEL_FORCE) {
         const scale = MAX_ACCEL_FORCE / forceMagnitude;
         force.x *= scale; force.z *= scale;
     }
+
+    // DETAILED LOGGING FOR FORCES
+    console.log(`[ForceCalc] Player: ${playerId}, Tick: ${players[playerId].lastProcessedSequence}, Keys: ${JSON.stringify(keys)}`);
+    console.log(`[ForceCalc] CurrentVel: x:${currentLinvel.x.toFixed(2)}, z:${currentLinvel.z.toFixed(2)}, DesiredVel: x:${desiredVelocity.x.toFixed(2)}, z:${desiredVelocity.z.toFixed(2)}`);
+    console.log(`[ForceCalc] AppliedForce: x:${force.x.toFixed(2)}, y:${force.y.toFixed(2)}, z:${force.z.toFixed(2)}, IsOnGround: ${isOnGround}`);
+
     playerBody.applyImpulse(force, true);
+
     // Jumping
     if (keys.Space && canJump) {
         playerBody.applyImpulse({ x: 0, y: JUMP_IMPULSE, z: 0 }, true);
@@ -1090,8 +1125,8 @@ function updateGroundStatus(playerId) {
     const currentPos = body.translation();
 
     // Calculate capsule bottom sphere center (adjust based on capsule collider dimensions)
-    const playerHeight = 1.8; // Must match createPlayerPhysicsBody
-    const playerRadius = 0.4;
+    const playerHeight = PLAYER_TOTAL_HEIGHT; // Use global constant
+    const playerRadius = PLAYER_RADIUS;       // Use global constant
     const halfHeight = playerHeight / 2;
     const capsuleBottomOffset = halfHeight - playerRadius;
     const rayOrigin = { x: currentPos.x, y: currentPos.y - capsuleBottomOffset, z: currentPos.z };
@@ -1099,16 +1134,14 @@ function updateGroundStatus(playerId) {
     const rayDirection = { x: 0, y: -1, z: 0 };
     const rayLength = playerRadius + 0.15; // Cast just below the capsule radius + a small buffer
 
-    // TODO: Define collision groups for raycast filtering (e.g., only hit WORLD)
-    // const filterCollider = null; // Replace with actual collider handle to ignore self if needed
-    // const filterGroups = interactionGroups(CollisionGroup.PLAYER_RAYCAST, [CollisionGroup.WORLD]);
+    const filterGroups = interactionGroups(CollisionGroup.PLAYER_UTILITY_RAY, [CollisionGroup.WORLD]); // Ray is part of UTILITY_RAY, wants to hit WORLD
 
     const ray = new RAPIER.Ray(rayOrigin, rayDirection);
     const hit = rapierWorld.castRay(
         ray,
         rayLength,
         true, // Solid check
-        // filterGroups // Add collision group filter here when defined
+        filterGroups // ADDED: Filter to only hit world geometry
         // filterCollider // Add self-collider filter here when defined
     );
 
@@ -1193,6 +1226,8 @@ function respawnPlayer(playerId) {
     // Ensure spawnIndex is valid
     spawnIndex = Math.min(spawnPoints.length - 1, Math.max(0, Math.floor(spawnIndex)));
     const spawnPoint = spawnPoints[spawnIndex];
+
+    console.log(`DEBUG: Respawning ${playerId} - Raw spawnPoints from config: ${JSON.stringify(mapConfig?.physicsData?.spawnPoints)}. Selected index: ${spawnIndex}. Final spawnPoint for physics: ${JSON.stringify(spawnPoint)}`); // DEBUG LOG
 
     console.log(`Respawning ${playerId} at index ${spawnIndex}: ${JSON.stringify(spawnPoint)}`);
 

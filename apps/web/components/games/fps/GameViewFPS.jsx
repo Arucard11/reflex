@@ -209,6 +209,29 @@ function GameViewFPS({
                     case 'Space': inputStateRef.current.keys.Space = true; break;
                     case 'ShiftLeft': inputStateRef.current.keys.Shift = true; break;
                     case 'KeyC': inputStateRef.current.keys.C = true; break; // Camera toggle still needs lock
+                    // --- ADDED: Reload Key 'R' --- 
+                    case 'KeyR': // Reload Action
+                        inputStateRef.current.keys.Reload = true; // Track key state
+                        // Get current game state and player state
+                        const localPlayerState = gameStateRef.current?.players?.[localPlayerUserId];
+                        if (localPlayerState && localPlayerState.state === 'alive' && !localPlayerState.isReloading) {
+                            const activeWeaponId = localPlayerState.weaponSlots?.[localPlayerState.activeWeaponSlot];
+                            const weaponConfig = WEAPON_CONFIG_FPS[activeWeaponId];
+
+                            if (activeWeaponId && weaponConfig && localPlayerState.currentAmmoInClip < weaponConfig.ammoCapacity) {
+                                console.log('[Client Input] Reload key pressed. Sending RELOAD_WEAPON_FPS.');
+                                socketRef.current?.emit(MessageTypeFPS.RELOAD_WEAPON_FPS);
+                                
+                                // Play FPV reload animation immediately (non-looping)
+                                // IMPORTANT: Ensure your FPV GLB model for 'activeWeaponId' has an animation named 'reload'
+                                playFpvAnimation(activeWeaponId, 'reload', false); 
+                            } else {
+                                console.log('[Client Input] Reload condition not met (e.g. full ammo, already reloading, no weapon).');
+                            }
+                        } else {
+                            console.log('[Client Input] Cannot reload: Player not alive or already reloading.');
+                        }
+                        break;
                     // Add other game action keys here...
                 }
             }
@@ -232,6 +255,10 @@ function GameViewFPS({
                             cameraModeRef.current.isThirdPerson = !cameraModeRef.current.isThirdPerson;
                         }
                         inputStateRef.current.keys.C = false; break;
+                    // --- ADDED: Reload Key 'R' --- 
+                    case 'KeyR': 
+                        inputStateRef.current.keys.Reload = false; // Untrack key state
+                        break;
                     // Add other keys later
                 }
             }
@@ -636,6 +663,12 @@ function GameViewFPS({
                     // Get Local Player State
                     const localState = gameStateRef.current?.players?.[localPlayerUserId];
 
+                    // Get active weapon ID from game state for FPV model visibility
+                    let activeWeaponId = null;
+                    if (localState && localState.weaponSlots && localState.activeWeaponSlot !== undefined) {
+                        activeWeaponId = localState.weaponSlots[localState.activeWeaponSlot];
+                    }
+
                     // >>> NEW: Send Input State Periodically <<<
                     const now = performance.now();
                     if (socketRef.current?.connected && now - lastInputSendTimeRef.current > INPUT_SEND_INTERVAL) {
@@ -741,28 +774,53 @@ function GameViewFPS({
                         localPlayerRef.current.mesh.visible = cameraModeRef.current.isThirdPerson;
                         // NEW: Update mesh from predicted Rapier body state
                         if (localPlayerRef.current.rapierBody) {
+                            // Fetch localCharConfig to get visualYOffset
+                            const localCharConfig = CHARACTER_CONFIG_FPS[localPlayerCharacterId];
+                            const localCharacterVisualYOffset = localCharConfig?.visualYOffset || 0.0;
+
                             const totalCapsuleHalfHeightForVisuals = PLAYER_VISUAL_TOTAL_HEIGHT / 2;
 
-                            const predictedPos = localPlayerRef.current.rapierBody.translation(); 
-                            const predictedRot = localPlayerRef.current.rapierBody.rotation(); 
-                            
-                            localPlayerRef.current.mesh.position.set(
+                            const predictedPos = localPlayerRef.current.rapierBody.translation();
+                            const predictedRot = localPlayerRef.current.rapierBody.rotation();
+
+                            const targetPosition = new THREE.Vector3(
                                 predictedPos.x,
-                                predictedPos.y - totalCapsuleHalfHeightForVisuals + localCharacterVisualYOffset, 
+                                predictedPos.y - totalCapsuleHalfHeightForVisuals + localCharacterVisualYOffset,
                                 predictedPos.z
                             );
-                            
-                            if (!cameraModeRef.current.isThirdPerson) {
-                                localPlayerRef.current.mesh.quaternion.set(predictedRot.x, predictedRot.y, predictedRot.z, predictedRot.w);
+
+                            // Smooth position
+                            localPlayerRef.current.mesh.position.lerp(targetPosition, 0.25); // Smoothing factor
+
+                            // Smooth rotation
+                            // In third person, the mesh fully orients with the physics body's rotation.
+                            // In first person, the mesh is invisible, but if it were to be shown (e.g. for shadows),
+                            // it typically only rotates around the Y-axis (yaw) with the body.
+                            const targetQuaternion = new THREE.Quaternion(predictedRot.x, predictedRot.y, predictedRot.z, predictedRot.w);
+                            if (cameraModeRef.current.isThirdPerson) {
+                                localPlayerRef.current.mesh.quaternion.slerp(targetQuaternion, 0.25); // Smoothing factor
                             } else {
-                                const bodyQuaternion = new THREE.Quaternion(predictedRot.x, predictedRot.y, predictedRot.z, predictedRot.w);
-                                const euler = new THREE.Euler().setFromQuaternion(bodyQuaternion, 'YXZ');
-                                localPlayerRef.current.mesh.rotation.y = euler.y; 
+                                // For an invisible FPV mesh, or a mesh that only needs yaw sync:
+                                const currentBodyEuler = new THREE.Euler().setFromQuaternion(targetQuaternion, 'YXZ');
+                                const currentMeshQuaternion = localPlayerRef.current.mesh.quaternion.clone();
+                                const targetMeshEuler = new THREE.Euler().setFromQuaternion(currentMeshQuaternion, 'YXZ');
+                                targetMeshEuler.y = currentBodyEuler.y; // Only sync yaw
+                                localPlayerRef.current.mesh.quaternion.slerp(new THREE.Quaternion().setFromEuler(targetMeshEuler), 0.25);
                             }
+
                         } else if (localState && localState.position && localState.rotation) {
                             // Fallback to lerping server state if body missing (e.g., before spawn)
-                            localPlayerRef.current.mesh.position.lerp(localState.position, 0.3);
-                            localPlayerRef.current.mesh.quaternion.slerp(localState.rotation, 0.3);
+                            // This part already uses lerp/slerp, which is good.
+                            const localCharConfig = CHARACTER_CONFIG_FPS[localPlayerCharacterId];
+                            const localCharacterVisualYOffset = localCharConfig?.visualYOffset || 0.0;
+                            const totalCapsuleHalfHeightForVisuals = PLAYER_VISUAL_TOTAL_HEIGHT / 2;
+                            const serverTargetPosition = new THREE.Vector3(
+                                localState.position.x,
+                                localState.position.y - totalCapsuleHalfHeightForVisuals + localCharacterVisualYOffset,
+                                localState.position.z
+                            );
+                            localPlayerRef.current.mesh.position.lerp(serverTargetPosition, 0.3);
+                            localPlayerRef.current.mesh.quaternion.slerp(new THREE.Quaternion(localState.rotation.x, localState.rotation.y, localState.rotation.z, localState.rotation.w), 0.3);
                         }
                     }
                     if (remotePlayerRef.current.mesh) {
