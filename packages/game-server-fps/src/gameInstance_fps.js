@@ -52,8 +52,8 @@ let MapId, CharacterId, GrenadeType, MessageTypeFPS, MAP_CONFIGS_FPS, CHARACTER_
 // --- Constants for Movement ---
 const TICK_RATE = 60; // Ticks per second
 const TICK_INTERVAL_MS = 1000 / TICK_RATE;
-const WALK_SPEED = 2.5; // Further reduced to match client
-const RUN_SPEED = 4.0; // Further reduced to match client
+const WALK_SPEED = 10; // Further reduced to match client
+const RUN_SPEED = 20; // Further reduced to match client
 const JUMP_IMPULSE = 5.0; // Further reduced to match client
 const ACCELERATION_FORCE = 800.0; // Further reduced to match client
 const MAX_ACCEL_FORCE = 20.0; // Further reduced to match client
@@ -1023,6 +1023,10 @@ function applyMovementInputToPlayer(playerId, playerBody, keys, lookQuat, deltaT
     if (keys.D) { moveDirection.x += right.x; moveDirection.z += right.z; isMoving = true; }
 
     if (isMoving) {
+        // Invert final movement vector to match user expectation
+        moveDirection.x *= -1;
+        moveDirection.z *= -1;
+
         const mag = Math.sqrt(moveDirection.x**2 + moveDirection.z**2);
         if (mag > 1e-6) { moveDirection.x /= mag; moveDirection.z /= mag; }
         const targetSpeed = keys.Shift ? RUN_SPEED : WALK_SPEED;

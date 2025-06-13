@@ -106,8 +106,8 @@ function GameViewFPS({
         if (!playerBody || physicsDeltaTime <= 0) return;
         
         // Reduced speeds and forces for smoother movement
-        const walkSpeed = 2.5; // Further reduced from 3.0
-        const runSpeed = 4.0; // Further reduced from 5.0
+        const walkSpeed = 10; // Further reduced from 3.0
+        const runSpeed = 20; // Further reduced from 5.0
         const jumpImpulse = 5.0; // Further reduced from 6.0
         const accelerationForce = 800.0; // Further reduced from 1200.0
         const maxAccelForce = 20.0; // Further reduced from 30.0
@@ -119,7 +119,7 @@ function GameViewFPS({
         let isMoving = false;
         
         const _lookQuat = new THREE.Quaternion(inputLookQuat.x, inputLookQuat.y, inputLookQuat.z, inputLookQuat.w);
-        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(_lookQuat);
+        const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(_lookQuat);
         const right = new THREE.Vector3(1, 0, 0).applyQuaternion(_lookQuat);
         forward.y = 0; 
         right.y = 0; 
@@ -132,6 +132,7 @@ function GameViewFPS({
         if (inputKeys.D) { moveDirection.add(right); isMoving = true; }
         
         if (isMoving) {
+            moveDirection.negate(); // Invert final movement vector
             moveDirection.normalize();
             const targetSpeed = inputKeys.Shift ? runSpeed : walkSpeed;
             desiredVelocity.x = moveDirection.x * targetSpeed;
@@ -443,6 +444,11 @@ function GameViewFPS({
                 cameraRef.current = new THREE.PerspectiveCamera(75, canvasElement.clientWidth / canvasElement.clientHeight, 0.1, 1000);
                 cameraRef.current.position.set(0, 1.6, 5); // Initial placeholder position
                 sceneRef.current.add(cameraRef.current);
+
+                // DEBUG: Log initial camera direction
+                const initialDirection = new THREE.Vector3();
+                cameraRef.current.getWorldDirection(initialDirection);
+                console.log('Initial Camera Facing Direction:', initialDirection);
 
                 // >>> MODIFIED: Adjust FPV camera position <<<
                 // Assign FPV camera to ref
