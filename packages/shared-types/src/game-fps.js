@@ -154,26 +154,12 @@ export const MAP_CONFIGS_FPS = {
             vertices: map1Vertices,
             indices: map1Indices,
             spawnPoints: [
-                { x: 3, y: 6, z: -7 }, // Player 1 spawn
+                { x: -3, y: 6, z: -7 }, // Player 1 spawn
                 { x: -3, y: 6, z: 7 }  // Player 2 spawn (Y changed from -6 to 6)
             ],
         }
-    },
-    // [MapId.MAP_2]: { // Removed
-    //     id: MapId.MAP_2, name: 'Map 2', visualAssetPath: '/assets/fps_1v1/models/map2.glb',
-    //     physicsData: {
-    //         vertices: map2Vertices,
-    //         indices: map2Indices,
-    //         spawnPoints: [{ x: 0, y: 1, z: -10 }, { x: 0, y: 1, z: 10 }],
-    //     }
-    // },
-    // [MapId.MAP_3]: { // Removed
-    //     id: MapId.MAP_3, name: 'Map 3', visualAssetPath: '/assets/fps_1v1/models/map3.glb',
-    //     // Map 3: No trimesh data available, leave vertices/indices undefined (physics loading will fail)
-    //     physicsData: {
-    //         spawnPoints: [{ x: -15, y: 1, z: 0 }, { x: 15, y: 1, z: 0 }]
-    //     }
-    // },
+    }
+
 };
 
 // --- Network Message Payloads & State ---

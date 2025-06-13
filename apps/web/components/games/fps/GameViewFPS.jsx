@@ -40,10 +40,11 @@ function GameViewFPS({
     opponentPlayerCharacterId, // ID of the character selected by opponent
 }) {
     const canvasRef = useRef(null); // Ref for the rendering canvas
-    const socketRef = useRef(null);
+    const socketRef = useRef(null); // NEW: Use a ref for the socket instance
     const retryTimeoutRef = useRef(null); // Ref for retry timer
     // NEW: Ref for current animation state - Separate refs for player and FPV
     const currentPlayerActionRef = useRef(null);
+    const currentRemoteActionRef = useRef(null); // Add remote player animation ref
     const currentFpvActionRef = useRef(null); // Ref for currently playing FPV animation
     const gameStateRef = useRef(null);
     const [gameStateVersion, setGameStateVersion] = useState(0); // Only for UI updates
@@ -57,6 +58,7 @@ function GameViewFPS({
     const remotePlayerRef = useRef({ mesh: null, mixer: null });
     const fpvElementsRef = useRef({ camera: null, weaponModels: {}, grappleRopeMaterial: null });
     const playerAnimationActionsRef = useRef({});
+    const remotePlayerAnimationActionsRef = useRef({}); // Add remote player animations ref
     const renderLoopIdRef = useRef(null); // Ref for render loop ID
 
     // State for loading/connection status
@@ -77,9 +79,12 @@ function GameViewFPS({
         sequence: 0,
         pendingInputs: [],
         isAiming: false, // NEW: Track right mouse button state
+        // NEW: Separate mouse look components
+        cameraPitch: 0, // Up/down rotation for camera
+        characterYaw: 0, // Left/right rotation for character
     });
     const lastInputSendTimeRef = useRef(0);
-    const INPUT_SEND_INTERVAL = 1000 / 30;
+    const INPUT_SEND_INTERVAL = 1000 / 30; // Increased to 30Hz for smoother input
 
     // Use the existing cameraModeRef for all camera state:
     const cameraModeRef = useRef({
@@ -87,65 +92,103 @@ function GameViewFPS({
         isOrbital: false
     });
 
-
+    // NEW: Add smoothing state for better interpolation
+    const smoothingStateRef = useRef({
+        lastServerUpdate: 0,
+        targetPosition: new THREE.Vector3(),
+        targetRotation: new THREE.Quaternion(),
+        targetVelocity: new THREE.Vector3(),
+        interpolationAlpha: 0,
+    });
 
     // --- Client-Side Prediction & Movement Engine ---
     const applyInputPhysics = useCallback((playerBody, inputKeys, inputLookQuat, physicsDeltaTime) => {
         if (!playerBody || physicsDeltaTime <= 0) return;
-        const walkSpeed = 5.0;
-        const runSpeed = 8.0;
-        const jumpImpulse = 7.0;
-        const accelerationForce = 2000.0;
-        const maxAccelForce = 50.0;
+        
+        // Reduced speeds and forces for smoother movement
+        const walkSpeed = 2.5; // Further reduced from 3.0
+        const runSpeed = 4.0; // Further reduced from 5.0
+        const jumpImpulse = 5.0; // Further reduced from 6.0
+        const accelerationForce = 800.0; // Further reduced from 1200.0
+        const maxAccelForce = 20.0; // Further reduced from 30.0
         const airControlFactor = 0.2;
+        const dampingFactor = 0.95; // Add damping to smooth out movement
+        
         let desiredVelocity = new THREE.Vector3(0, 0, 0);
         let moveDirection = new THREE.Vector3(0, 0, 0);
         let isMoving = false;
+        
         const _lookQuat = new THREE.Quaternion(inputLookQuat.x, inputLookQuat.y, inputLookQuat.z, inputLookQuat.w);
         const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(_lookQuat);
         const right = new THREE.Vector3(1, 0, 0).applyQuaternion(_lookQuat);
-        forward.y = 0; right.y = 0; forward.normalize(); right.normalize();
+        forward.y = 0; 
+        right.y = 0; 
+        forward.normalize(); 
+        right.normalize();
+        
         if (inputKeys.W) { moveDirection.add(forward); isMoving = true; }
         if (inputKeys.S) { moveDirection.sub(forward); isMoving = true; }
         if (inputKeys.A) { moveDirection.sub(right); isMoving = true; }
         if (inputKeys.D) { moveDirection.add(right); isMoving = true; }
+        
         if (isMoving) {
             moveDirection.normalize();
             const targetSpeed = inputKeys.Shift ? runSpeed : walkSpeed;
             desiredVelocity.x = moveDirection.x * targetSpeed;
             desiredVelocity.z = moveDirection.z * targetSpeed;
         }
+        
         const currentLinvel = playerBody.linvel();
+        
+        // Apply damping to current velocity for smoother movement
+        const dampedVelocity = {
+            x: currentLinvel.x * dampingFactor,
+            y: currentLinvel.y, // Don't damp Y velocity (gravity/jumping)
+            z: currentLinvel.z * dampingFactor
+        };
+        
+        // Calculate force needed to reach desired velocity
         let force = new THREE.Vector3(0, 0, 0);
-        const velocityDiffX = desiredVelocity.x - currentLinvel.x;
-        const velocityDiffZ = desiredVelocity.z - currentLinvel.z;
-        force.x = velocityDiffX * accelerationForce * physicsDeltaTime;
-        force.z = velocityDiffZ * accelerationForce * physicsDeltaTime;
+        const velocityDiffX = desiredVelocity.x - dampedVelocity.x;
+        const velocityDiffZ = desiredVelocity.z - dampedVelocity.z;
+        
+        // Use smaller, smoother force application
+        force.x = velocityDiffX * accelerationForce * physicsDeltaTime * 0.5; // Reduced force multiplier
+        force.z = velocityDiffZ * accelerationForce * physicsDeltaTime * 0.5;
+        
         // TODO: Air control factor application needs ground check state
         // const isOnGround = true; // Placeholder
         // if (!isOnGround) { force.x *= airControlFactor; force.z *= airControlFactor; }
+        
+        // Clamp force magnitude for stability
         const forceMagnitude = force.length();
-        if (forceMagnitude > maxAccelForce) force.multiplyScalar(maxAccelForce / forceMagnitude);
-        playerBody.applyImpulse({ x: force.x, y: 0, z: force.z }, true);
-        // Jumping
-        // const isOnGround = true; // Placeholder
+        if (forceMagnitude > maxAccelForce) {
+            force.multiplyScalar(maxAccelForce / forceMagnitude);
+        }
+        
+        // Apply the smoothed velocity first, then the force
+        playerBody.setLinvel(dampedVelocity, true);
+        if (forceMagnitude > 0.1) { // Only apply force if it's significant
+            playerBody.applyImpulse({ x: force.x, y: 0, z: force.z }, true);
+        }
+        
+        // Jumping - reduced impulse for smoother feel
         if (inputKeys.Space /* && isOnGround */) {
             playerBody.applyImpulse({ x: 0, y: jumpImpulse, z: 0 }, true);
         }
+        
         // Grapple Gun Physics (if active) -- placeholder for client prediction
         // ...
     }, []);
 
     // Effect for initialization and cleanup
     useEffect(() => {
-        console.log(`GameViewFPS Mounting for match: ${matchId}`);
         const canvasElement = canvasRef.current;
         if (!canvasElement) return;
 
-        // --- StrictMode Guard --- Prevent multiple initializations
-        if (socketRef.current) {
-            console.log("Socket already exists, skipping initialization (StrictMode re-mount?).");
-            return; // Don't re-initialize if socket exists
+        // --- StrictMode Guard ---
+        if (socketRef.current) { // Check the ref
+            return; 
         }
         // --- End StrictMode Guard ---
 
@@ -161,8 +204,6 @@ function GameViewFPS({
 
         // >>> NEW: Move Input Handlers outside initGame <<< Plan 2.2.1 / 2.2.2
         const handleKeyDown = (event) => {
-            console.log(`[DEBUG] KeyDown: code=${event.code}, key=${event.key}`);
-
             // --- Handle Debug Toggle Key ('B') - Use State ---
             if (event.code === 'KeyB') {
                 event.preventDefault(); // Prevent browser 'b' input
@@ -172,11 +213,9 @@ function GameViewFPS({
 
                 if (nextIsEnabled) {
                     // If ENABLING debug mode, exit pointer lock FIRST
-                    console.log('Requesting exit from pointer lock...');
                     document.exitPointerLock();
                 } else {
                     // If DISABLING debug mode, request pointer lock (requires user click)
-                    console.log('Debug mode disabled. Click canvas to re-lock pointer.');
                     // canvasRef.current?.requestPointerLock(); // Don't force it here
                 }
 
@@ -185,7 +224,6 @@ function GameViewFPS({
                 setIsDebugModeEnabled(nextIsEnabled);
                 // Keep ref in sync for internal logic
                 cameraModeRef.current.isOrbital = nextIsEnabled;
-                console.log(`Debug mode toggled via state: ${nextIsEnabled}.`);
 
                 return; // Stop processing other keys if 'B' was pressed
             }
@@ -202,12 +240,24 @@ function GameViewFPS({
             // Map event.code to inputState keys (only when pointer locked)
             if (document.pointerLockElement) {
                 switch (event.code) {
-                    case 'KeyW': inputStateRef.current.keys.W = true; break;
-                    case 'KeyA': inputStateRef.current.keys.A = true; break;
-                    case 'KeyS': inputStateRef.current.keys.S = true; break;
-                    case 'KeyD': inputStateRef.current.keys.D = true; break;
-                    case 'Space': inputStateRef.current.keys.Space = true; break;
-                    case 'ShiftLeft': inputStateRef.current.keys.Shift = true; break;
+                    case 'KeyW': 
+                        inputStateRef.current.keys.W = true; 
+                        break;
+                    case 'KeyA': 
+                        inputStateRef.current.keys.A = true; 
+                        break;
+                    case 'KeyS': 
+                        inputStateRef.current.keys.S = true; 
+                        break;
+                    case 'KeyD': 
+                        inputStateRef.current.keys.D = true; 
+                        break;
+                    case 'Space': 
+                        inputStateRef.current.keys.Space = true; 
+                        break;
+                    case 'ShiftLeft': 
+                        inputStateRef.current.keys.Shift = true; 
+                        break;
                     case 'KeyC': inputStateRef.current.keys.C = true; break; // Camera toggle still needs lock
                     // --- ADDED: Reload Key 'R' --- 
                     case 'KeyR': // Reload Action
@@ -219,17 +269,14 @@ function GameViewFPS({
                             const weaponConfig = WEAPON_CONFIG_FPS[activeWeaponId];
 
                             if (activeWeaponId && weaponConfig && localPlayerState.currentAmmoInClip < weaponConfig.ammoCapacity) {
-                                console.log('[Client Input] Reload key pressed. Sending RELOAD_WEAPON_FPS.');
                                 socketRef.current?.emit(MessageTypeFPS.RELOAD_WEAPON_FPS);
                                 
                                 // Play FPV reload animation immediately (non-looping)
                                 // IMPORTANT: Ensure your FPV GLB model for 'activeWeaponId' has an animation named 'reload'
                                 playFpvAnimation(activeWeaponId, 'reload', false); 
                             } else {
-                                console.log('[Client Input] Reload condition not met (e.g. full ammo, already reloading, no weapon).');
                             }
                         } else {
-                            console.log('[Client Input] Cannot reload: Player not alive or already reloading.');
                         }
                         break;
                     // Add other game action keys here...
@@ -237,18 +284,28 @@ function GameViewFPS({
             }
         };
         const handleKeyUp = (event) => {
-            console.log(`[DEBUG] KeyUp: code=${event.code}, key=${event.key}`);
-
             // Only process game key releases if pointer was locked during release
             // or if the key being released is the debug key itself.
             if (document.pointerLockElement || event.code === 'KeyB') {
                 switch (event.code) {
-                    case 'KeyW': inputStateRef.current.keys.W = false; break;
-                    case 'KeyA': inputStateRef.current.keys.A = false; break;
-                    case 'KeyS': inputStateRef.current.keys.S = false; break;
-                    case 'KeyD': inputStateRef.current.keys.D = false; break;
-                    case 'Space': inputStateRef.current.keys.Space = false; break;
-                    case 'ShiftLeft': inputStateRef.current.keys.Shift = false; break;
+                    case 'KeyW': 
+                        inputStateRef.current.keys.W = false; 
+                        break;
+                    case 'KeyA': 
+                        inputStateRef.current.keys.A = false; 
+                        break;
+                    case 'KeyS': 
+                        inputStateRef.current.keys.S = false; 
+                        break;
+                    case 'KeyD': 
+                        inputStateRef.current.keys.D = false; 
+                        break;
+                    case 'Space': 
+                        inputStateRef.current.keys.Space = false; 
+                        break;
+                    case 'ShiftLeft': 
+                        inputStateRef.current.keys.Shift = false; 
+                        break;
                     // Camera toggle on KeyUp only if it was pressed down
                     case 'KeyC':
                         if (inputStateRef.current.keys.C) {
@@ -265,38 +322,43 @@ function GameViewFPS({
         };
 
         const handleMouseMove = (event) => {
-            // NEW: Log entry into the handler
-            console.log('handleMouseMove fired.');
-            // NEW: Log pointer lock status
-            console.log('Pointer Lock Element:', document.pointerLockElement);
-
             // Need camera defined before use - ensure initGame runs first or check existence
             if (!document.pointerLockElement || !cameraRef.current) return;
 
             const movementX = event.movementX || 0;
             const movementY = event.movementY || 0;
-            const sensitivity = 0.002;
+            const sensitivity = 0.002; // Increased sensitivity for better responsiveness
 
-            const euler = new THREE.Euler(0, 0, 0, 'YXZ');
-            euler.setFromQuaternion(cameraRef.current.quaternion);
-            euler.y -= movementX * sensitivity;
-            euler.x -= movementY * sensitivity;
-            euler.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, euler.x));
-            cameraRef.current.quaternion.setFromEuler(euler);
+            // NEW: Update separate pitch and yaw values
+            inputStateRef.current.cameraPitch -= movementY * sensitivity;
+            inputStateRef.current.characterYaw -= movementX * sensitivity;
 
-            // Update lookQuat in input state
-            inputStateRef.current.lookQuat.x = cameraRef.current.quaternion.x;
-            inputStateRef.current.lookQuat.y = cameraRef.current.quaternion.y;
-            inputStateRef.current.lookQuat.z = cameraRef.current.quaternion.z;
-            inputStateRef.current.lookQuat.w = cameraRef.current.quaternion.w;
+            // Clamp camera pitch to prevent over-rotation
+            inputStateRef.current.cameraPitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, inputStateRef.current.cameraPitch));
+
+            // Create camera quaternion from pitch and yaw
+            const cameraEuler = new THREE.Euler(inputStateRef.current.cameraPitch, inputStateRef.current.characterYaw, 0, 'YXZ');
+            const targetCameraQuaternion = new THREE.Quaternion().setFromEuler(cameraEuler);
+            
+            // Smooth camera rotation
+            cameraRef.current.quaternion.slerp(targetCameraQuaternion, 0.3);
+
+            // Create character quaternion (yaw only for body rotation)
+            const characterEuler = new THREE.Euler(0, inputStateRef.current.characterYaw, 0, 'YXZ');
+            const characterQuaternion = new THREE.Quaternion().setFromEuler(characterEuler);
+
+            // Update input state quaternion for server (this represents the character's body orientation)
+            inputStateRef.current.lookQuat = {
+                x: characterQuaternion.x,
+                y: characterQuaternion.y,
+                z: characterQuaternion.z,
+                w: characterQuaternion.w
+            };
         };
 
         const handlePointerLockChange = () => {
-            // NEW: Log pointer lock changes
             if (document.pointerLockElement === canvasElement) {
-                console.log('Pointer Locked (handlePointerLockChange)');
             } else {
-                console.log('Pointer Unlocked (handlePointerLockChange)');
             }
         };
 
@@ -318,7 +380,6 @@ function GameViewFPS({
             // Access FPV elements via ref
             const weaponData = fpvElementsRef.current.weaponModels[weaponId];
             if (!weaponData || !weaponData.mixer || !weaponData.animations || !weaponData.animations[actionName]) {
-                // console.warn(`FPV Animation '${actionName}' not found for weapon '${weaponId}' or mixer invalid.`);
                 return null; // Return null if action not found or invalid
             }
 
@@ -327,7 +388,6 @@ function GameViewFPS({
             const previousAction = currentFpvActionRef.current; // Use dedicated ref for FPV
 
             if (previousAction !== newAction) {
-                // console.log(`[FPV Anim] Playing '${actionName}' for ${weaponId}`); // Debug log
                 if (previousAction) {
                     previousAction.fadeOut(0.2); // Fade out previous action
                 }
@@ -353,15 +413,7 @@ function GameViewFPS({
         async function initGame() {
             try {
                 if (!isMounted) return;
-                console.log('Initializing Three.js, Rapier...');
-
-                // >>> ADD CONSOLE LOGS HERE <<<
-                console.log('[GameViewFPS Props] mapId:', mapId);
-                console.log('[GameViewFPS Props] localPlayerCharacterId:', localPlayerCharacterId);
-                console.log('[GameViewFPS Props] opponentPlayerCharacterId:', opponentPlayerCharacterId);
-                console.log('[GameViewFPS Available Configs] MAP_CONFIGS_FPS:', MAP_CONFIGS_FPS);
-                console.log('[GameViewFPS Available Configs] CHARACTER_CONFIG_FPS:', CHARACTER_CONFIG_FPS);
-
+                
                 setIsLoading(true);
                 setConnectionStatus('initializing');
 
@@ -375,13 +427,9 @@ function GameViewFPS({
                 const localCharacterVisualYOffset = localCharConfig.visualYOffset || 0.0;
                 // We'll get the remote character's visualYOffset later when we have gameState
 
-                console.log("Configuration accessed."); // Log progress
-
                 // --- Asset Loaders ---
                 const loader = new GLTFLoader();
                 
-                console.log("Loaders created."); // Log progress
-
                 // --- Three.js Core Setup ---
                 // Assign to refs
                 rendererRef.current = new THREE.WebGLRenderer({ canvas: canvasElement, antialias: true });
@@ -407,10 +455,8 @@ function GameViewFPS({
                 directionalLight.position.set(10, 15, 5);
                 directionalLight.castShadow = true; // Enable shadows
                 sceneRef.current.add(directionalLight);
-                console.log("Three.js core setup complete."); // Log progress
-
+                
                 // --- Load Map Visuals (NEW) ---
-                console.log(`Loading visual map: ${mapConfig.visualAssetPath}`);
                 const mapGltf = await loader.loadAsync(mapConfig.visualAssetPath);
                 const mapMesh = mapGltf.scene;
                 mapMesh.traverse(node => { // Enable shadows on map objects
@@ -420,14 +466,11 @@ function GameViewFPS({
                     }
                 });
                 sceneRef.current.add(mapMesh); // Add to scene via ref
-                console.log(`Map ${mapId} visuals loaded.`);
-
+                
                 // --- Load Character Models ---
-                console.log("Loading character models...");
                 const localModelPath = localCharConfig.modelPath;
                 const remoteModelPath = remoteCharConfig.modelPath;
-                console.log(`Local model: ${localModelPath}, Remote model: ${remoteModelPath}`);
-
+                
                 let localCharacterGltf, remoteCharacterGltf;
                 try {
                     [localCharacterGltf, remoteCharacterGltf] = await Promise.all([
@@ -445,18 +488,69 @@ function GameViewFPS({
 
                 // Log all animation names for the local character model
                 if (localCharacterGltf.animations && localCharacterGltf.animations.length > 0) {
-                    console.log('Character Model Animations:');
                     localCharacterGltf.animations.forEach((clip, idx) => {
-                        console.log(`  [${idx}] ${clip.name}`);
                     });
                 } else {
-                    console.warn('No animations found in the loaded character model!');
                 }
 
-                playerAnimationActionsRef.current = {}; // Use ref
+                // Log all animation names for the remote character model
+                if (remoteCharacterGltf.animations && remoteCharacterGltf.animations.length > 0) {
+                    remoteCharacterGltf.animations.forEach((clip, idx) => {
+                    });
+                } else {
+                }
+
+                // Store animations for both players
+                playerAnimationActionsRef.current = {}; // Local player animations
+                remotePlayerAnimationActionsRef.current = {}; // Remote player animations
+                
                 localCharacterGltf.animations.forEach(clip => {
-                    playerAnimationActionsRef.current[clip.name] = clip; // Assign to ref
+                    playerAnimationActionsRef.current[clip.name] = clip; // Local player
                 });
+                
+                remoteCharacterGltf.animations.forEach(clip => {
+                    remotePlayerAnimationActionsRef.current[clip.name] = clip; // Remote player
+                });
+
+                // Animation name mapping - Updated based on actual GLB animation names
+                // From the logs, we can see the actual available animations in the GLB file
+                const animationMapping = {
+                    // Logical name -> Actual GLB animation name
+                    'idle': 'idle',                    // Use the actual 'idle' animation for neutral pose
+                    'aimIdle': 'aimIdle',             // Aiming idle pose
+                    'fireIdle': 'fireIdle',           // Firing idle pose
+                    'grenadeIdle': 'idleGrenadeThrow', // Grenade throwing idle pose
+                    'reloadIdle': 'reloadIdle',       // Reloading idle pose
+                    'crouchIdle': 'crouchIdle',       // Crouching idle pose
+                    // Movement animations - use actual names
+                    'walkForward': 'walkForward',
+                    'walkBackward': 'walkBackward',
+                    'strafeLeft': 'strafeLeft',
+                    'strafeRight': 'strafeRight',
+                    'runFowardFire': 'runFowardFire', // Keep the typo as it exists in GLB
+                    'runLeft': 'runLeft',
+                    'runRight': 'runRight',
+                    'runBackward': 'runBackward',
+                    'runForwardLeft': 'runForwardLeft',
+                    'runForwardRight': 'runForwardRight',
+                    'runBackwardLeft': 'runBackwardLeft',
+                    'runBackwardRight': 'runBackwardRight',
+                    'walkForwardLeft': 'walkForwardLeft',
+                    'walkForwardRight': 'walkForwardRight',
+                    'walkBackwardLeft': 'walkBackwardLeft',
+                    'walkBackwardRight': 'walkBackwardRight',
+                    'death': 'death',
+                };
+
+                // Helper function to get the correct animation name
+                const getCorrectAnimationName = (logicalName) => {
+                    return animationMapping[logicalName] || logicalName;
+                };
+
+                // Apply 14% size reduction (scale by 0.86)
+                const characterScale = 0.40;
+                localPlayerRef.current.mesh.scale.setScalar(characterScale);
+                remotePlayerRef.current.mesh.scale.setScalar(characterScale);
 
                 localPlayerRef.current.mesh.traverse(node => { if (node.isMesh) node.castShadow = true; });
                 remotePlayerRef.current.mesh.traverse(node => { if (node.isMesh) node.castShadow = true; });
@@ -468,40 +562,114 @@ function GameViewFPS({
                 // Assign to refs
                 localPlayerRef.current.mixer = new THREE.AnimationMixer(localPlayerRef.current.mesh);
                 remotePlayerRef.current.mixer = new THREE.AnimationMixer(remotePlayerRef.current.mesh);
-                console.log("Character models loaded and mixers created.");
+                
+                // NEW: Initialize with a proper starting animation to prevent wrong animations from playing
+                if (localCharacterGltf.animations && localCharacterGltf.animations.length > 0) {
+                    // Improved initialization with exact matching
+                    let startingAnim = null;
+                    
+                    // Step 1: Try exact matches for ideal starting animations (in priority order)
+                    const idealStarters = ['idle', 'Idle', 'idle_pose', 'T-pose', 'Default'];
+                    for (const candidate of idealStarters) {
+                        if (playerAnimationActionsRef.current[candidate]) {
+                            startingAnim = candidate;
+                            break;
+                        }
+                    }
+                    
+                    // Step 2: If no ideal starter, look for any animation with "idle" in the name
+                    if (!startingAnim) {
+                        const idleVariants = Object.keys(playerAnimationActionsRef.current).filter(name => 
+                            name.toLowerCase().includes('idle')
+                        );
+                        if (idleVariants.length > 0) {
+                            startingAnim = idleVariants[0];
+                        }
+                    }
+                    
+                    // Step 3: If still no starter, use first safe animation (not reload/attack related)
+                    if (!startingAnim) {
+                        const safeAnimNames = Object.keys(playerAnimationActionsRef.current).filter(name => 
+                            !name.toLowerCase().includes('reload') && 
+                            !name.toLowerCase().includes('attack') && 
+                            !name.toLowerCase().includes('fire') &&
+                            !name.toLowerCase().includes('shoot') &&
+                            !name.toLowerCase().includes('death') &&
+                            !name.toLowerCase().includes('hit')
+                        );
+                        if (safeAnimNames.length > 0) {
+                            startingAnim = safeAnimNames[0];
+                        }
+                    }
+                    
+                    // Step 4: Last resort - use any available animation
+                    if (!startingAnim) {
+                        const allAnimNames = Object.keys(playerAnimationActionsRef.current);
+                        if (allAnimNames.length > 0) {
+                            startingAnim = allAnimNames[0];
+                        }
+                    }
+                    
+                    // Start the appropriate animation
+                    if (startingAnim && playerAnimationActionsRef.current[startingAnim]) {
+                        const initAction = localPlayerRef.current.mixer.clipAction(playerAnimationActionsRef.current[startingAnim]);
+                        initAction.reset().setEffectiveTimeScale(1).setEffectiveWeight(1).play();
+                        initAction.loop = THREE.LoopRepeat;
+                        currentPlayerActionRef.current = initAction;
+                    } else {
+                        console.error('[Animation Init] 💀 CRITICAL: No suitable starting animation found!');
+                    }
+                }
 
-                // ... after loading localPlayer.mesh and remotePlayer.mesh, before adding to scene ...
-                localPlayerRef.current.mesh.scale.set(0.3, 0.3, 0.3); // DEBUG: Reduce character size
-                remotePlayerRef.current.mesh.scale.set(0.3, 0.3, 0.3); // DEBUG: Reduce character size
-                console.log('[DEBUG] Character model scale set to (0.3, 0.3, 0.3)');
+                // Initialize remote player with starting animation
+                if (remoteCharacterGltf.animations && remoteCharacterGltf.animations.length > 0) {
+                    // Use logical 'idle' as the default for remote player
+                    let remoteStartingAnim = 'idle';
+                    
+                    // Apply mapping to get correct GLB animation name
+                    const mappedRemoteStartingAnim = getCorrectAnimationName(remoteStartingAnim);
+                    
+                    // Fallback if mapped animation doesn't exist
+                    if (!remotePlayerAnimationActionsRef.current[mappedRemoteStartingAnim]) {
+                        const remoteAnimNames = Object.keys(remotePlayerAnimationActionsRef.current);
+                        if (remoteAnimNames.length > 0) {
+                            const fallbackAnim = remoteAnimNames[0];
+                            
+                            if (remotePlayerAnimationActionsRef.current[fallbackAnim]) {
+                                const remoteInitAction = remotePlayerRef.current.mixer.clipAction(remotePlayerAnimationActionsRef.current[fallbackAnim]);
+                                remoteInitAction.reset().setEffectiveTimeScale(1).setEffectiveWeight(1).play();
+                                remoteInitAction.loop = THREE.LoopRepeat;
+                                currentRemoteActionRef.current = remoteInitAction;
+                            }
+                        }
+                    } else {
+                        const remoteInitAction = remotePlayerRef.current.mixer.clipAction(remotePlayerAnimationActionsRef.current[mappedRemoteStartingAnim]);
+                        remoteInitAction.reset().setEffectiveTimeScale(1).setEffectiveWeight(1).play();
+                        remoteInitAction.loop = THREE.LoopRepeat;
+                        currentRemoteActionRef.current = remoteInitAction;
+                    }
+                }
 
                 // --- Load FPV Arms/Weapons (NEW - logic from 2.1.2 adapted) ---
-                console.log("Loading FPV assets...");
-                fpvElementsRef.current.weaponModels = {}; // Reset via ref
-
+                fpvElementsRef.current.weaponModels = {}; // Store loaded FPV models by weapon ID
                 for (const weaponId in WEAPON_CONFIG_FPS) {
-                    const weaponConfig = WEAPON_CONFIG_FPS[weaponId];
-                    if (!weaponConfig || !weaponConfig.fpvModelPath) {
-                        console.warn(`Skipping FPV model for ${weaponId}: Missing config or fpvModelPath.`);
-                        continue;
-                    }
-                    const modelPath = weaponConfig.fpvModelPath;
-                    console.log(`Attempting to load FPV model for ${weaponId} from ${modelPath}`);
                     try {
-                        const fpvGltf = await loader.loadAsync(modelPath);
-                        if (!isMounted) return; // Check mount status after await
+                        const weaponConfig = WEAPON_CONFIG_FPS[weaponId];
+                        const modelPath = weaponConfig.fpvModelPath;
+                        if (!modelPath) {
+                            continue;
+                        }
 
+                        const fpvGltf = await loader.loadAsync(modelPath);
                         const weaponGroup = fpvGltf.scene;
+
+                        // Process animations if any
                         const weaponAnimations = {};
-                        // Store animations found in this model
                         if (fpvGltf.animations && fpvGltf.animations.length > 0) {
-                            // console.log(`Animations found for FPV model '${weaponId}' (${modelPath}):`);
-                            fpvGltf.animations.forEach(clip => {
-                                // console.log(`- ${clip.name}`);
-                                weaponAnimations[clip.name] = clip; // Store clip by name
+                            fpvGltf.animations.forEach((clip, idx) => {
+                                weaponAnimations[clip.name] = clip;
                             });
                         } else {
-                            // console.log(`No animations found for FPV model '${weaponId}' (${modelPath}).`);
                         }
 
                         weaponGroup.traverse(node => {
@@ -530,54 +698,43 @@ function GameViewFPS({
 
                         weaponGroup.visible = false; // Hide initially
 
-                        console.log(`Successfully loaded and setup FPV group for ${weaponId}`);
-
                     } catch (e) {
                          console.error(`FPV model '${modelPath}' failed to load or process:`, e);
                     }
                 }
-                console.log("Finished loading FPV assets."); // Log completion
-
+                
                 // --- Load Grapple Visuals ---
                 // Assign to ref
                 fpvElementsRef.current.grappleRopeMaterial = new THREE.LineBasicMaterial({ color: 0xffffff, linewidth: 2 });
-                console.log("Grapple visuals placeholder ready."); // Log progress
-
+                
                 // --- Rapier Setup ---
-                console.log('Initializing Client Rapier...');
                 await RAPIER.init();
                 if (!isMounted) return; // Check after await
                 // Assign to ref
                 rapierWorldRef.current = new RAPIER.World({ x: 0.0, y: -9.81, z: 0.0 });
-                console.log('Client Rapier World created.'); // Log progress
-
+                
                 // --- Load Map Physics (Client - Mirroring server 1.2.2) ---
-                console.log(`Loading Client Physics for Map ID: ${mapId}...`);
                 const clientMapConfig = MAP_CONFIGS_FPS[mapId]; // Use a different variable name
                 if (!clientMapConfig || !clientMapConfig.physicsData) {
-                    console.warn(`Client: No physicsData found for map ${mapId}.`);
                 } else {
                     const clientPhysicsData = clientMapConfig.physicsData;
-                    console.log("Client: Found Physics Data:", JSON.stringify(clientPhysicsData, null, 2)); // Log physics data
-
+                    
                     // --- Only support Trimesh Loading ---
                     if (clientPhysicsData.vertices && clientPhysicsData.vertices.length > 0 && clientPhysicsData.indices && clientPhysicsData.indices.length > 0) {
-                        console.log(`[Client Physics Load] Attempting to load TR MESH...`);
                         try {
                             const rigidBodyDesc = RAPIER.RigidBodyDesc.fixed();
                             const body = rapierWorldRef.current.createRigidBody(rigidBodyDesc);
                             const trimeshDesc = RAPIER.ColliderDesc.trimesh(clientPhysicsData.vertices, clientPhysicsData.indices);
-                            console.log(`[Client Physics Load] TrimeshDesc created.`);
+                             
                             // IMPORTANT: Set Collision Groups - MUST MATCH SERVER
                             const groups = interactionGroups(
                                 CollisionGroup.WORLD,
                                 [CollisionGroup.PLAYER_BODY, CollisionGroup.GRENADE, CollisionGroup.PROJECTILE]
                             );
                             trimeshDesc.setCollisionGroups(groups);
-                            console.log(`[Client Physics Load] Trimesh Set collision groups to:`, groups);
+                             
                             // Use rapierWorldRef
                             const collider = rapierWorldRef.current.createCollider(trimeshDesc, body);
-                            console.log(`[Client Physics Load] SUCCESS: Created client trimesh map collider handle: ${collider.handle}`);
                         } catch (error) {
                             console.error(`[Client Physics Load] ERROR: Failed to create client trimesh collider for map ${mapId}:`, error);
                             // No fallback to primitives
@@ -586,8 +743,7 @@ function GameViewFPS({
                         console.error(`[Client Physics Load] No valid trimesh data found for map ${mapId}. Physics loading failed.`);
                     }
                 }
-                console.log('Client Map Physics Loading Attempt Complete.');
-
+                
                 // --- Resize Handling ---
                 const handleResize = () => {
                     // Access via refs
@@ -601,8 +757,7 @@ function GameViewFPS({
                 };
                 window.addEventListener('resize', handleResize, { signal: abortController.signal });
                 handleResize(); // Initial size calculation
-                console.log("Resize handler set."); // Log progress
-
+                
                 // >>> MODIFIED: Add Input Listeners (handlers defined outside now) <<<
                 document.addEventListener('keydown', handleKeyDown, { signal: abortController.signal });
                 document.addEventListener('keyup', handleKeyUp, { signal: abortController.signal });
@@ -614,32 +769,23 @@ function GameViewFPS({
                 if (canvasElement) { // Ensure canvasElement exists
                     // Attach pointer lock error handler once
                     document.addEventListener('pointerlockerror', (event) => {
-                        // >>> ADDED LOG <<<
                         console.error('[PointerLock] Error acquiring pointer lock:', event);
                     }, { once: true });
 
                     const pointerLockClickListener = () => {
                         // Only request pointer lock if NOT in debug/orbital mode
                         if (!isDebugModeEnabled && !document.pointerLockElement) {
-                            // >>> ADDED LOG <<<
-                            console.log('[PointerLock] Attempting to request pointer lock...');
                             if (typeof canvasElement.requestPointerLock === 'function') {
                                 canvasElement.requestPointerLock(); // No .catch(), synchronous in most browsers
                                 cameraModeRef.current.isOrbital = false; // <<< Disable debug when locking pointer
-                                // >>> ADDED LOG <<<
-                                console.log('[PointerLock] requestPointerLock() called.');
                             } else {
                                 console.error('[PointerLock] Error: canvasElement.requestPointerLock is not a function!');
                             }
                         } else if (isDebugModeEnabled) {
-                            console.log('[PointerLock] Debug mode active, not requesting pointer lock.');
                         } else {
-                            // >>> ADDED LOG <<<
-                            console.log('[PointerLock] Pointer already locked.');
                         }
                     };
                     canvasElement.addEventListener('click', pointerLockClickListener, { signal: abortController.signal });
-                    console.log("[PointerLock] Click listener attached.");
                 } else {
                     console.error("[PointerLock] Canvas element not found at pointer lock setup!");
                 }
@@ -647,7 +793,7 @@ function GameViewFPS({
                 // --- Render Loop ---
                 let lastTimestamp = performance.now();
                 const clock = new THREE.Clock(); // Use Clock for mixer updates
-                const thirdPersonOffset = new THREE.Vector3(0, 2, -2); // Camera offset behind player (changed from -4 to -2)
+                const thirdPersonOffset = new THREE.Vector3(0, 1.5, -1.2); // Camera offset behind player - closer to character
                 const tempPlayerPos = new THREE.Vector3(); // Temporary vectors for calculations
                 const tempCameraPos = new THREE.Vector3();
                 const tempLookAt = new THREE.Vector3();
@@ -680,6 +826,12 @@ function GameViewFPS({
                             keys: { ...inputStateRef.current.keys }, // Send current key state
                             lookQuat: { ...inputStateRef.current.lookQuat }
                         };
+                        
+                        // NEW: Log input being sent to server
+                        const hasMovementKeys = payload.keys.W || payload.keys.A || payload.keys.S || payload.keys.D || payload.keys.Shift;
+                        if (hasMovementKeys) {
+                        }
+                        
                         socketRef.current.emit(MessageTypeFPS.PLAYER_INPUT_FPS, payload);
                         lastInputSendTimeRef.current = now;
                         // Store this input locally for reconciliation (Plan 2.3.1)
@@ -694,8 +846,6 @@ function GameViewFPS({
                     // --- Physics Simulation --- (NEW - Step 2.2.1 Client Prediction)
                     // 1. Apply Local Input Prediction (Before stepping world)
                     if (localPlayerRef.current.rapierBody && localState && localState.state === 'alive') {
-                        // >>> ADDED LOG <<<
-                        console.log(`[Predict] Applying input: W=${inputStateRef.current.keys.W} | Body Vel: ${localPlayerRef.current.rapierBody.linvel().x.toFixed(2)},${localPlayerRef.current.rapierBody.linvel().y.toFixed(2)},${localPlayerRef.current.rapierBody.linvel().z.toFixed(2)}`);
                         // Apply physics using the helper function
                         applyInputPhysics(localPlayerRef.current.rapierBody, inputStateRef.current.keys, inputStateRef.current.lookQuat, deltaTime);
                     }
@@ -703,9 +853,7 @@ function GameViewFPS({
                     // 2. Step Client Physics World
                     if (rapierWorldRef.current) {
                         rapierWorldRef.current.step();
-                        // >>> ADDED LOG <<<
                         if (localPlayerRef.current.rapierBody) {
-                             console.log(`[Predict] After Step: Body Pos: ${localPlayerRef.current.rapierBody.translation().x.toFixed(2)},${localPlayerRef.current.rapierBody.translation().y.toFixed(2)},${localPlayerRef.current.rapierBody.translation().z.toFixed(2)}`);
                         }
                     }
                     // --- End Physics Simulation ---
@@ -717,30 +865,156 @@ function GameViewFPS({
                     // --- Character Animation Logic (Movement Animations) ---
                     if (localPlayerRef.current.mixer && playerAnimationActionsRef.current) {
                         const keys = inputStateRef.current.keys;
+                        const localState = gameStateRef.current?.players?.[localPlayerUserId];
+                        
                         let targetAnim = null;
 
+                        // Use the actual animation names from the GLB file
                         if (keys.W && keys.Shift) {
-                            targetAnim = 'rifle run forward';
+                            targetAnim = 'runFowardFire'; // Note: GLB has typo "Foward" instead of "Forward"
                         } else if (keys.W) {
-                            targetAnim = 'walk';
+                            targetAnim = 'walkForward';
                         } else if (keys.S) {
-                            targetAnim = 'walking backwards';
+                            targetAnim = 'walkBackward';
                         } else if (keys.A) {
-                            targetAnim = 'strafe left';
+                            targetAnim = 'strafeLeft';
                         } else if (keys.D) {
-                            targetAnim = 'strafe right';
+                            targetAnim = 'strafeRight';
                         } else {
+                            // Use logical 'idle' - mapping will convert to correct GLB animation
                             targetAnim = 'idle';
                         }
 
-                        // Optionally, override with aim idle if aiming
-                        // if (inputStateRef.current.isAiming && playerAnimationActionsRef.current['aim idle']) {
-                        //     targetAnim = 'aim idle';
-                        // }
+                        // Enhanced DEBUG: Log available animations and target animation
+                        const availableAnims = Object.keys(playerAnimationActionsRef.current);
+                        
+                        // Apply animation name mapping to get the correct GLB animation
+                        const mappedAnimName = getCorrectAnimationName(targetAnim);
+                        
+                        // Improved animation selection with exact matching and semantic fallbacks
+                        let finalTargetAnim = null;
+                        
+                        // Step 1: Try exact match first (using mapped name)
+                        if (playerAnimationActionsRef.current[mappedAnimName]) {
+                            finalTargetAnim = mappedAnimName;
+                        } else {
+                            
+                            // Step 2: Try semantic fallbacks with priority ranking
+                            const semanticFallbacks = {
+                                'idle': [
+                                    'idle',           // Exact match (shouldn't reach here)
+                                    'Idle',           // Case variation
+                                    'idle_pose',      // Common naming
+                                    'aimIdle',        // Specific idle variants
+                                    'fireIdle',
+                                    'T-pose',         // Bind pose
+                                    'Default'         // Default pose
+                                ],
+                                'walkForward': [
+                                    'walkForward',
+                                    'walk_forward',
+                                    'walkFoward',     // Handle typos in GLB
+                                    'runForward',     // Close alternative
+                                    'walking',
+                                    'walk'
+                                ],
+                                'runFowardFire': [
+                                    'runFowardFire',
+                                    'runForwardFire', // Correct spelling
+                                    'run_forward_fire',
+                                    'runForward',     // Without fire
+                                    'runFoward',      // Common typo
+                                    'walkForward'     // Slower alternative
+                                ],
+                                'walkBackward': [
+                                    'walkBackward',
+                                    'walk_backward',
+                                    'runBackward',
+                                    'walking_back'
+                                ],
+                                'strafeLeft': [
+                                    'strafeLeft',
+                                    'strafe_left',
+                                    'walkLeft',
+                                    'runLeft',
+                                    'sideLeft'
+                                ],
+                                'strafeRight': [
+                                    'strafeRight',
+                                    'strafe_right',
+                                    'walkRight',
+                                    'runRight',
+                                    'sideRight'
+                                ]
+                            };
+                            
+                            const candidates = semanticFallbacks[targetAnim] || [];
+                            
+                            // Try each candidate in priority order
+                            for (const candidate of candidates) {
+                                if (playerAnimationActionsRef.current[candidate]) {
+                                    finalTargetAnim = candidate;
+                                    break;
+                                }
+                            }
+                            
+                            // Step 3: If still no match, try universal fallbacks
+                            if (!finalTargetAnim) {
+                                
+                                // Filter for safe idle animations (exclude action-specific idles)
+                                const safeIdleAnims = availableAnims.filter(name => {
+                                    const lowerName = name.toLowerCase();
+                                    // Include animations that contain "idle" BUT exclude action-specific ones
+                                    return (
+                                        lowerName.includes('idle') || 
+                                        lowerName.includes('stand') || 
+                                        lowerName.includes('pose')
+                                    ) && !(
+                                        // Exclude action-specific idle animations
+                                        lowerName.includes('grenade') ||
+                                        lowerName.includes('throw') ||
+                                        lowerName.includes('reload') ||
+                                        lowerName.includes('fire') ||
+                                        lowerName.includes('shoot') ||
+                                        lowerName.includes('attack') ||
+                                        lowerName.includes('death') ||
+                                        lowerName.includes('hit') ||
+                                        lowerName.includes('damage')
+                                    );
+                                });
+                                
+                                const universalFallbacks = [
+                                    'idle', 'Idle', 'idle_pose', 'T-pose', 'Default',
+                                    ...safeIdleAnims
+                                ];
+                                
+                                
+                                for (const fallback of universalFallbacks) {
+                                    if (playerAnimationActionsRef.current[fallback]) {
+                                        finalTargetAnim = fallback;
+                                        break;
+                                    }
+                                }
+                            }
+                            
+                            // Step 4: Last resort - use first available animation
+                            if (!finalTargetAnim && availableAnims.length > 0) {
+                                finalTargetAnim = availableAnims[0];
+                            }
+                            
+                            // Step 5: Complete failure - no animations available
+                            if (!finalTargetAnim) {
+                                if (currentPlayerActionRef.current) {
+                                    currentPlayerActionRef.current.stop();
+                                    currentPlayerActionRef.current = null;
+                                }
+                                return; // Exit early
+                            }
+                        }
 
                         const mixer = localPlayerRef.current.mixer;
                         const actions = playerAnimationActionsRef.current;
-                        const newAction = actions[targetAnim] ? mixer.clipAction(actions[targetAnim]) : null;
+                        const newAction = actions[finalTargetAnim] ? mixer.clipAction(actions[finalTargetAnim]) : null;
                         const prevAction = currentPlayerActionRef.current;
 
                         if (newAction && prevAction !== newAction) {
@@ -750,6 +1024,61 @@ function GameViewFPS({
                             newAction.reset().setEffectiveTimeScale(1).setEffectiveWeight(1).fadeIn(0.2).play();
                             newAction.loop = THREE.LoopRepeat;
                             currentPlayerActionRef.current = newAction;
+                        } else if (newAction) {
+                        }
+                        
+                    }
+
+                    // --- Remote Player Animation Logic ---
+                    if (remotePlayerRef.current.mixer && remotePlayerAnimationActionsRef.current) {
+                        // Find the opponent by finding the player that's not the local player
+                        let remoteState = null;
+                        if (gameStateRef.current?.players) {
+                            for (const userId in gameStateRef.current.players) {
+                                if (userId !== localPlayerUserId) {
+                                    remoteState = gameStateRef.current.players[userId];
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        if (remoteState && remoteState.state === 'alive') {
+                            // Determine remote player animation based on server state
+                            let remoteTargetAnim = 'idle'; // Default to logical idle (will be mapped)
+                            
+                            // Simple animation logic based on velocity (server sends this)
+                            if (remoteState.velocity) {
+                                const speed = Math.sqrt(remoteState.velocity.x**2 + remoteState.velocity.z**2);
+                                if (speed > 0.1) {
+                                    // Player is moving
+                                    if (speed > 6) {
+                                        remoteTargetAnim = 'runFowardFire'; // Running
+                                    } else {
+                                        remoteTargetAnim = 'walkForward'; // Walking
+                                    }
+                                }
+                            }
+                            
+                            // Apply mapping to get correct GLB animation name
+                            const mappedRemoteAnimName = getCorrectAnimationName(remoteTargetAnim);
+                            
+                            // Apply animation to remote player
+                            const remoteMixer = remotePlayerRef.current.mixer;
+                            const remoteActions = remotePlayerAnimationActionsRef.current;
+                            
+                            if (remoteActions[mappedRemoteAnimName]) {
+                                const newRemoteAction = remoteMixer.clipAction(remoteActions[mappedRemoteAnimName]);
+                                const prevRemoteAction = currentRemoteActionRef.current;
+                                
+                                if (newRemoteAction && prevRemoteAction !== newRemoteAction) {
+                                    if (prevRemoteAction) {
+                                        prevRemoteAction.fadeOut(0.2);
+                                    }
+                                    newRemoteAction.reset().setEffectiveTimeScale(1).setEffectiveWeight(1).fadeIn(0.2).play();
+                                    newRemoteAction.loop = THREE.LoopRepeat;
+                                    currentRemoteActionRef.current = newRemoteAction;
+                                }
+                            }
                         }
                     }
 
@@ -781,7 +1110,6 @@ function GameViewFPS({
                             const totalCapsuleHalfHeightForVisuals = PLAYER_VISUAL_TOTAL_HEIGHT / 2;
 
                             const predictedPos = localPlayerRef.current.rapierBody.translation();
-                            const predictedRot = localPlayerRef.current.rapierBody.rotation();
 
                             const targetPosition = new THREE.Vector3(
                                 predictedPos.x,
@@ -790,23 +1118,15 @@ function GameViewFPS({
                             );
 
                             // Smooth position
-                            localPlayerRef.current.mesh.position.lerp(targetPosition, 0.25); // Smoothing factor
+                            localPlayerRef.current.mesh.position.lerp(targetPosition, 0.4); // Increased smoothing
 
-                            // Smooth rotation
-                            // In third person, the mesh fully orients with the physics body's rotation.
-                            // In first person, the mesh is invisible, but if it were to be shown (e.g. for shadows),
-                            // it typically only rotates around the Y-axis (yaw) with the body.
-                            const targetQuaternion = new THREE.Quaternion(predictedRot.x, predictedRot.y, predictedRot.z, predictedRot.w);
-                            if (cameraModeRef.current.isThirdPerson) {
-                                localPlayerRef.current.mesh.quaternion.slerp(targetQuaternion, 0.25); // Smoothing factor
-                            } else {
-                                // For an invisible FPV mesh, or a mesh that only needs yaw sync:
-                                const currentBodyEuler = new THREE.Euler().setFromQuaternion(targetQuaternion, 'YXZ');
-                                const currentMeshQuaternion = localPlayerRef.current.mesh.quaternion.clone();
-                                const targetMeshEuler = new THREE.Euler().setFromQuaternion(currentMeshQuaternion, 'YXZ');
-                                targetMeshEuler.y = currentBodyEuler.y; // Only sync yaw
-                                localPlayerRef.current.mesh.quaternion.slerp(new THREE.Quaternion().setFromEuler(targetMeshEuler), 0.25);
-                            }
+                            // NEW: Use character yaw for mesh rotation (not physics body rotation)
+                            // The physics body rotation is locked to prevent tipping, but the visual mesh should rotate with mouse yaw
+                            const characterYawQuaternion = new THREE.Quaternion();
+                            characterYawQuaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), inputStateRef.current.characterYaw);
+                            
+                            // Smooth mesh rotation using character yaw
+                            localPlayerRef.current.mesh.quaternion.slerp(characterYawQuaternion, 0.4);
 
                         } else if (localState && localState.position && localState.rotation) {
                             // Fallback to lerping server state if body missing (e.g., before spawn)
@@ -819,13 +1139,26 @@ function GameViewFPS({
                                 localState.position.y - totalCapsuleHalfHeightForVisuals + localCharacterVisualYOffset,
                                 localState.position.z
                             );
-                            localPlayerRef.current.mesh.position.lerp(serverTargetPosition, 0.3);
-                            localPlayerRef.current.mesh.quaternion.slerp(new THREE.Quaternion(localState.rotation.x, localState.rotation.y, localState.rotation.z, localState.rotation.w), 0.3);
+                            localPlayerRef.current.mesh.position.lerp(serverTargetPosition, 0.4); // Increased smoothing
+                            
+                            // Use server rotation for mesh when physics body not available
+                            const serverQuaternion = new THREE.Quaternion(localState.rotation.x, localState.rotation.y, localState.rotation.z, localState.rotation.w);
+                            localPlayerRef.current.mesh.quaternion.slerp(serverQuaternion, 0.4);
                         }
                     }
                     if (remotePlayerRef.current.mesh) {
-                         const remoteState = gameStateRef.current?.players?.[opponentPlayerId];
-                         if (remoteState && remoteState.position && remoteState.rotation) {
+                         // Find the opponent by finding the player that's not the local player
+                         let remoteState = null;
+                         if (gameStateRef.current?.players) {
+                             for (const userId in gameStateRef.current.players) {
+                                 if (userId !== localPlayerUserId) {
+                                     remoteState = gameStateRef.current.players[userId];
+                                     break;
+                                 }
+                             }
+                         }
+                         
+                         if (remoteState && remoteState.position && remoteState.rotation && remoteState.state === 'alive') {
                             remotePlayerRef.current.mesh.visible = true; 
                             const totalCapsuleHalfHeightForVisuals = PLAYER_VISUAL_TOTAL_HEIGHT / 2;
                             
@@ -842,8 +1175,15 @@ function GameViewFPS({
                             
                             const remoteQuaternion = new THREE.Quaternion(remoteState.rotation.x, remoteState.rotation.y, remoteState.rotation.z, remoteState.rotation.w);
                             remotePlayerRef.current.mesh.quaternion.slerp(remoteQuaternion, 0.3);
+                            
+                            console.log(`Remote player visible at: ${targetPosition.x.toFixed(2)}, ${targetPosition.y.toFixed(2)}, ${targetPosition.z.toFixed(2)}`);
                         } else {
                             remotePlayerRef.current.mesh.visible = false;
+                            if (remoteState) {
+                                console.log(`Remote player hidden - state: ${remoteState.state}, hasPosition: ${!!remoteState.position}, hasRotation: ${!!remoteState.rotation}`);
+                            } else {
+                                console.log('No remote player state found');
+                            }
                          }
                     }
 
@@ -865,25 +1205,26 @@ function GameViewFPS({
                             // First-person camera logic (Look handled by mousemove, position follows predicted body)
                              if (localPlayerRef.current.rapierBody) {
                                  const predictedPos = localPlayerRef.current.rapierBody.translation();
-                                cameraRef.current.position.set(
+                                const targetCameraPos = new THREE.Vector3(
                                     predictedPos.x,
                                     predictedPos.y + 1.6, // FPV camera height offset
                                     predictedPos.z
                                 );
+                                // Add smoothing to reduce choppiness
+                                cameraRef.current.position.lerp(targetCameraPos, 0.3);
                              } else if (localState && localState.position) {
                                  // Fallback if body not ready
-                                cameraRef.current.position.set(
+                                const targetCameraPos = new THREE.Vector3(
                                     localState.position.x,
                                     localState.position.y + 1.6,
                                     localState.position.z
                                 );
+                                cameraRef.current.position.lerp(targetCameraPos, 0.3);
                             }
-                             // Note: First-person camera rotation is directly handled by handleMouseMove
                         }
                     } else {
                         // Orbital mode is active - DO NOTHING here, let DebugControls handle it completely.
                         // Prevent any game logic from updating camera position or rotation.
-                        console.log('[Debug Mode] Orbital camera active, game camera updates disabled.');
                     }
 
                     // Render Scene
@@ -893,61 +1234,21 @@ function GameViewFPS({
                     }
 
                     if (!localPlayerRef.current.mesh) {
-                        console.warn('[DEBUG] localPlayer.mesh is missing!');
                     }
                     if (!localPlayerRef.current.rapierBody) {
-                        console.warn('[DEBUG] localPlayer.rapierBody is missing!');
                     }
                     if (!localState) {
-                        console.warn('[DEBUG] localState is missing!');
                     } else if (localState.state !== 'alive') {
-                        console.log(`[DEBUG] localState is not 'alive' (state: ${localState.state}), prediction/input might be ignored.`);
                     }
                     if (localPlayerRef.current.mesh && localPlayerRef.current.rapierBody) {
-                        console.log(`[DEBUG] Mesh position: (${localPlayerRef.current.mesh.position.x}, ${localPlayerRef.current.mesh.position.y}, ${localPlayerRef.current.mesh.position.z})`);
-                        console.log(`[DEBUG] Camera position: (${cameraRef.current.position.x}, ${cameraRef.current.position.y}, ${cameraRef.current.position.z})`);
                     }
                 };
-                console.log("Starting render loop...");
+                
                 renderLoopIdRef.current = requestAnimationFrame(render); // Use ref
 
-                // --- Socket.IO Connection --- (Refined Retry Logic)
+                // --- Socket.IO Connection ---
                 const connectToServer = () => {
-                    // Use ref
-                    if (rapierWorldRef.current && !localPlayerRef.current.rapierBody) {
-                       console.log("Creating CLIENT-SIDE Rapier body for prediction...");
-                       // Use placeholder initial position, server state will correct it
-                       const initialClientPos = {x:0, y:1, z:0};
-                       const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
-                         .setTranslation(initialClientPos.x, initialClientPos.y, initialClientPos.z)
-                         .setCanSleep(false).setCcdEnabled(true)
-                         .lockRotations(); // Ensure rotations are locked for the client-side body
-                       const body = rapierWorldRef.current.createRigidBody(bodyDesc);
-                       const playerHeight = PLAYER_VISUAL_TOTAL_HEIGHT; const playerRadius = PLAYER_VISUAL_RADIUS;
-                       const colliderDesc = RAPIER.ColliderDesc.capsule(playerHeight / 2 - playerRadius, playerRadius);
-                       // Apply properties after creation
-                       colliderDesc.setDensity(1.0);
-                       colliderDesc.setFriction(0.7);
-                       colliderDesc.setRestitution(0.2);
-                       // NEW: Set Collision Groups for client player body
-                       colliderDesc.setCollisionGroups(interactionGroups(
-                           CollisionGroup.PLAYER_BODY,
-                           [CollisionGroup.WORLD, CollisionGroup.PLAYER_BODY, CollisionGroup.GRENADE] // Match server player body interactions
-                       ));
-                       // Set active events AFTER setting groups
-                       colliderDesc.setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
-
-                       // Use rapierWorldRef
-                       const collider = rapierWorldRef.current.createCollider(colliderDesc, body);
-                       collider.userData = { type: 'playerBody', playerId: localPlayerUserId }; // Set userData on the created collider
-                       localPlayerRef.current.rapierBody = body;
-                       console.log("Client-side Rapier body created.");
-                    }
-
-                    if (!isMounted || socketRef.current?.connected || connectionStatus === 'connecting') return; // Prevent multiple concurrent attempts
-
-                    console.log(`Attempting connection (Attempt: ${retryAttempt + 1})...`);
-                    setConnectionStatus('connecting');
+                    if (!isMounted || socketRef.current?.connected) return; // Check the ref
 
                     // Clear previous socket instance if retrying
                     if (socketRef.current) {
@@ -956,60 +1257,118 @@ function GameViewFPS({
                     }
 
                     const newSocket = io(`ws://${serverIp}:${serverPort}`, {
-                        reconnection: false, // Manual retry
+                        reconnection: false, 
                         timeout: 5000,
-                        // query: { matchId, userId: localPlayerUserId } // Send identification info if server needs it on connect
                     });
-                    socketRef.current = newSocket;
+                    socketRef.current = newSocket; // Assign to the ref
 
                     newSocket.on('connect', () => {
                         if (!isMounted) return;
-                        console.log('Successfully connected. Socket ID:', newSocket.id);
                         setConnectionStatus('connected');
                         setRetryAttempt(0);
                         if (retryTimeoutRef.current) clearTimeout(retryTimeoutRef.current);
 
                         // Send identification
-                        console.log(`Sending IDENTIFY_PLAYER with userId: ${localPlayerUserId}`);
                         newSocket.emit(MessageTypeFPS.IDENTIFY_PLAYER, { userId: localPlayerUserId });
 
                         // Setup listeners
                         newSocket.on(MessageTypeFPS.GAME_STATE_FPS, (gameState) => {
-                            console.log('[DEBUG] Received GAME_STATE_FPS:', gameState);
-                            if (!isMounted) return;
+                            // NEW: Log detailed server state for local player
                             const serverPlayerState = gameState.players?.[localPlayerUserId];
+                            if (serverPlayerState) {
+                                console.log(`[Game State] Local player at: ${serverPlayerState.position?.x?.toFixed(2)}, ${serverPlayerState.position?.y?.toFixed(2)}, ${serverPlayerState.position?.z?.toFixed(2)}`);
+                            }
+                            
+                            // Debug: Log all players in game state
+                            if (gameState.players) {
+                                console.log(`[Game State] Players in state:`, Object.keys(gameState.players));
+                                for (const [userId, playerState] of Object.entries(gameState.players)) {
+                                    console.log(`[Game State] Player ${userId}: state=${playerState.state}, pos=${playerState.position?.x?.toFixed(2)},${playerState.position?.y?.toFixed(2)},${playerState.position?.z?.toFixed(2)}`);
+                                }
+                            }
+                            
+                            if (!isMounted) return;
 
-                            // Apply reconciliation if server state received
-                            if (serverPlayerState && serverPlayerState.lastProcessedSequence !== undefined && localPlayerRef.current.rapierBody) {
-                                const lastProcessedSequence = serverPlayerState.lastProcessedSequence;
-
-                                // Remove acknowledged inputs from pending buffer
-                                inputStateRef.current.pendingInputs = inputStateRef.current.pendingInputs.filter(
-                                    input => input.sequence > lastProcessedSequence
+                            // NEW: Improved reconciliation with better smoothing
+                            if (serverPlayerState && localPlayerRef.current.rapierBody) {
+                                const currentTime = performance.now();
+                                
+                                // Update smoothing targets
+                                smoothingStateRef.current.targetPosition.set(
+                                    serverPlayerState.position.x,
+                                    serverPlayerState.position.y,
+                                    serverPlayerState.position.z
                                 );
+                                smoothingStateRef.current.targetVelocity.set(
+                                    serverPlayerState.velocity.x,
+                                    serverPlayerState.velocity.y,
+                                    serverPlayerState.velocity.z
+                                );
+                                smoothingStateRef.current.targetRotation.set(
+                                    serverPlayerState.rotation.x,
+                                    serverPlayerState.rotation.y,
+                                    serverPlayerState.rotation.z,
+                                    serverPlayerState.rotation.w
+                                );
+                                smoothingStateRef.current.lastServerUpdate = currentTime;
 
-                                // Reset client physics state to authoritative server state
-                                localPlayerRef.current.rapierBody.setTranslation(serverPlayerState.position, true);
-                                localPlayerRef.current.rapierBody.setRotation(serverPlayerState.rotation, true);
-                                localPlayerRef.current.rapierBody.setLinvel(serverPlayerState.velocity, true);
-                                localPlayerRef.current.rapierBody.setAngvel({ x: 0, y: 0, z: 0 }, true); // Reset angular velocity too
+                                // Handle input reconciliation if sequence numbers are available
+                                if (serverPlayerState.lastProcessedSequence !== undefined) {
+                                    const lastProcessedSequence = serverPlayerState.lastProcessedSequence;
 
-                                // Re-apply pending (unacknowledged) inputs on top of server state
-                                inputStateRef.current.pendingInputs.forEach(input => {
-                                    // Use the same physics application function
-                                    applyInputPhysics(localPlayerRef.current.rapierBody, input.keys, input.lookQuat, input.deltaTime);
-                                    // Optionally, re-step the physics world for each pending input?
-                                    // rapierWorldRef.current?.step(); // This might be too expensive
-                                });
-                                // After re-applying inputs, the rapierBody is now the corrected predicted state
+                                    // Remove acknowledged inputs from pending buffer
+                                    inputStateRef.current.pendingInputs = inputStateRef.current.pendingInputs.filter(
+                                        input => input.sequence > lastProcessedSequence
+                                    );
 
-                            } else if (serverPlayerState && localPlayerRef.current.rapierBody) {
-                                // No sequence number? Maybe initial state or server doesn't support reconciliation fully yet.
-                                // Just hard-set state without replaying inputs for now.
-                                localPlayerRef.current.rapierBody.setTranslation(serverPlayerState.position, true);
-                                localPlayerRef.current.rapierBody.setRotation(serverPlayerState.rotation, true);
-                                localPlayerRef.current.rapierBody.setLinvel(serverPlayerState.velocity, true);
-                                localPlayerRef.current.rapierBody.setAngvel({ x: 0, y: 0, z: 0 }, true);
+                                    const currentPos = localPlayerRef.current.rapierBody.translation();
+                                    const currentVel = localPlayerRef.current.rapierBody.linvel();
+
+                                    // Calculate difference between client and server
+                                    const posDiff = Math.sqrt(
+                                        Math.pow(currentPos.x - serverPlayerState.position.x, 2) +
+                                        Math.pow(currentPos.y - serverPlayerState.position.y, 2) +
+                                        Math.pow(currentPos.z - serverPlayerState.position.z, 2)
+                                    );
+
+                                    // Only apply correction if difference is significant, but use much gentler corrections
+                                    if (posDiff > 0.05) { // Reduced threshold from 0.1
+                                        // Use very gentle correction instead of snapping
+                                        const correctionStrength = Math.min(0.1, posDiff * 0.2); // Much gentler correction
+                                        
+                                        const targetPos = {
+                                            x: currentPos.x + (serverPlayerState.position.x - currentPos.x) * correctionStrength,
+                                            y: currentPos.y + (serverPlayerState.position.y - currentPos.y) * correctionStrength,
+                                            z: currentPos.z + (serverPlayerState.position.z - currentPos.z) * correctionStrength
+                                        };
+                                        
+                                        localPlayerRef.current.rapierBody.setTranslation(targetPos, true);
+                                    }
+
+                                    // Much gentler velocity corrections
+                                    const velDiff = Math.sqrt(
+                                        Math.pow(currentVel.x - serverPlayerState.velocity.x, 2) +
+                                        Math.pow(currentVel.y - serverPlayerState.velocity.y, 2) +
+                                        Math.pow(currentVel.z - serverPlayerState.velocity.z, 2)
+                                    );
+
+                                    if (velDiff > 0.2) { // Reduced threshold
+                                        const velCorrectionStrength = 0.05; // Much gentler velocity correction
+                                        const targetVel = {
+                                            x: currentVel.x + (serverPlayerState.velocity.x - currentVel.x) * velCorrectionStrength,
+                                            y: currentVel.y + (serverPlayerState.velocity.y - currentVel.y) * velCorrectionStrength,
+                                            z: currentVel.z + (serverPlayerState.velocity.z - currentVel.z) * velCorrectionStrength
+                                        };
+                                        localPlayerRef.current.rapierBody.setLinvel(targetVel, true);
+                                    }
+
+                                    // Re-apply pending inputs with reduced impact
+                                    inputStateRef.current.pendingInputs.forEach((input, index) => {
+                                        // Reduce the impact of re-applied inputs to prevent over-correction
+                                        const scaledDeltaTime = input.deltaTime * 0.3; // Scale down re-applied inputs
+                                        applyInputPhysics(localPlayerRef.current.rapierBody, input.keys, input.lookQuat, scaledDeltaTime);
+                                    });
+                                }
                             }
 
                             // Always update the overall game state for rendering remote players, HUD, etc.
@@ -1020,8 +1379,7 @@ function GameViewFPS({
 
                         newSocket.on('disconnect', (reason) => {
                             if (!isMounted) return;
-                            console.log('Disconnected. Reason:', reason);
-                            socketRef.current = null;
+                            socketRef.current = null; // Clear the ref
                             gameStateRef.current = null;
                             setConnectionStatus('disconnected'); // Set to disconnected first
                             // If disconnect wasn't manual and retries left, schedule retry
@@ -1041,8 +1399,8 @@ function GameViewFPS({
                     newSocket.on('connect_error', (error) => {
                         if (!isMounted) return;
                         console.error('Connection error:', error.message);
-                        newSocket.disconnect(); // Clean up failed socket
-                        socketRef.current = null;
+                        newSocket.disconnect(); 
+                        socketRef.current = null; // Clear the ref
                         if (retryAttempt < MAX_RETRIES) {
                             setRetryAttempt(prev => prev + 1);
                             const delay = Math.pow(2, retryAttempt) * 1000;
@@ -1056,9 +1414,8 @@ function GameViewFPS({
                     });
                 };
 
-                connectToServer(); // Initial connection attempt
+                connectToServer();
 
-                console.log('Client Init Game Systems Placeholder Complete.');
                 setIsLoading(false);
 
             } catch (error) { // Catch errors during initGame
@@ -1074,7 +1431,6 @@ function GameViewFPS({
 
         // --- Cleanup Logic ---
         return () => {
-            console.log('GameViewFPS Unmounting, cleaning up...');
             isMounted = false;
             abortController.abort();
 
@@ -1083,11 +1439,10 @@ function GameViewFPS({
                 clearTimeout(retryTimeoutRef.current);
             }
 
-            // Disconnect socket if it exists
+            // Disconnect socket if it exists in the ref
             if (socketRef.current) {
-                 console.log(`Disconnecting socket ${socketRef.current.id} on unmount.`);
                 socketRef.current.disconnect();
-                socketRef.current = null; // Clear the ref
+                socketRef.current = null;
             }
 
             // Cancel render loop
@@ -1130,7 +1485,6 @@ function GameViewFPS({
                 rendererRef.current.dispose();
             }
             // OrbitControls disposal removed, handled by DebugControls
-            console.log("Client Cleanup Complete.");
         };
     }, [serverIp, serverPort, matchId, mapId, localPlayerCharacterId, opponentPlayerCharacterId, localPlayerUserId]); // Essential props that trigger re-init
 

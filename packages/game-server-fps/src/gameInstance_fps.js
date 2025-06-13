@@ -52,13 +52,14 @@ let MapId, CharacterId, GrenadeType, MessageTypeFPS, MAP_CONFIGS_FPS, CHARACTER_
 // --- Constants for Movement ---
 const TICK_RATE = 60; // Ticks per second
 const TICK_INTERVAL_MS = 1000 / TICK_RATE;
-const WALK_SPEED = 5.0;
-const RUN_SPEED = 8.0;
-const JUMP_IMPULSE = 7.0;
-const ACCELERATION_FORCE = 2000.0; // Force applied per second
-const MAX_ACCEL_FORCE = 50.0; // Max force applied per tick (scaled by deltaTime)
+const WALK_SPEED = 2.5; // Further reduced to match client
+const RUN_SPEED = 4.0; // Further reduced to match client
+const JUMP_IMPULSE = 5.0; // Further reduced to match client
+const ACCELERATION_FORCE = 800.0; // Further reduced to match client
+const MAX_ACCEL_FORCE = 20.0; // Further reduced to match client
 const AIR_CONTROL_FACTOR = 0.2; // How much control player has in air
-const MAX_PLAYER_SPEED = 9.0; // Absolute max speed for validation
+const MAX_PLAYER_SPEED = 5.0; // Reduced to match new run speed
+const DAMPING_FACTOR = 0.95; // Add damping factor for smoother movement
 
 // --- Initialization Sequence ---
 async function initialize() {
@@ -142,10 +143,10 @@ function parseArguments() {
     config = {
         port: argv.port,
         matchId: argv.matchId,
-        mapId: MapId.MAP_1,
+        mapId: argv.mapId,
         playersInfo: {
-            p1: { userId: argv.player1UserId, wallet: argv.player1Wallet, charId: CharacterId.CHAR_A },
-            p2: { userId: argv.player2UserId, wallet: argv.player2Wallet, charId: CharacterId.CHAR_A }
+            p1: { userId: argv.player1UserId, wallet: argv.player1Wallet, charId: argv.player1CharId },
+            p2: { userId: argv.player2UserId, wallet: argv.player2Wallet, charId: argv.player2CharId }
         },
         betAmountLamports: argv.betAmountLamports,
         serverAuthorityKeyPath: argv.serverAuthorityKeyPath,
@@ -181,7 +182,8 @@ function createPlayerPhysicsBody(playerId, position) {
         .setCanSleep(false)
         .setCcdEnabled(true)
         .lockRotations() // Prevent capsule from falling over
-        .setLinearDamping(0.5); // NEW: Add linear damping
+        .setLinearDamping(3.0) // Increased from 2.0 to 3.0 for even smoother movement
+        .setAngularDamping(8.0); // Increased from 5.0 to 8.0 for better stability
     const body = rapierWorld.createRigidBody(bodyDesc);
 
     // Create Collider (Capsule)
@@ -253,9 +255,9 @@ function initializePlayerStates() {
     const p2Info = config.playersInfo.p2;
 
     [p1Info, p2Info].forEach((playerInfo) => {
-        const charConfig = CHARACTER_CONFIG_FPS[CharacterId.CHAR_A];
+        const charConfig = CHARACTER_CONFIG_FPS[playerInfo.charId];
         if (!charConfig) {
-            throw new Error(`Character config not found for default charId: ${CharacterId.CHAR_A}`);
+            throw new Error(`Character config not found for charId: ${playerInfo.charId}`);
         }
         const defaultWeapon1 = 'rifle'; // Ensure this is a valid key in WEAPON_CONFIG_FPS
         const defaultWeapon2 = 'pistol'; // Ensure this is a valid key in WEAPON_CONFIG_FPS
@@ -263,9 +265,9 @@ function initializePlayerStates() {
         players[playerInfo.userId] = {
             userId: playerInfo.userId,
             wallet: playerInfo.wallet, // Store wallet for escrow later
-            characterId: CharacterId.CHAR_A,
+            characterId: playerInfo.charId,
             state: 'waiting', // Initial state before spawn
-            position: { x: 0, y: 0, z: 0 }, // Will be set on spawn
+            position: { x: 0, y: 0, z: 0}, // Will be set on spawn
             rotation: { x: 0, y: 0, z: 0, w: 1 }, // Placeholder, set on spawn/input
             velocity: { x: 0, y: 0, z: 0 }, // Updated from Rapier
             health: charConfig.baseHealth,
@@ -298,7 +300,7 @@ function initializePlayerStates() {
             isOnGround: false, // NEW: Track ground status for jumping/air control
             lastJumpTime: 0, // NEW: Prevent jump spam
         };
-        console.log(`Initialized state for ${playerInfo.userId} (Char: ${CharacterId.CHAR_A})`);
+        console.log(`Initialized state for ${playerInfo.userId} (Char: ${playerInfo.charId})`);
     });
 
    
@@ -345,6 +347,8 @@ function initSocketIO() {
                      // Send initial full game state ONLY to this connecting player
                      socket.emit(MessageTypeFPS.GAME_STATE_FPS, getFullGameStatePayload(userId));
                      console.log(`Sent initial game state to ${userId}`);
+                     // NEW LOGGING
+                     console.log(`[Connection Status] Total connected players: ${Object.keys(connectedPlayers).length}`);
                 } else {
                      console.error(`Player state not found for identified user: ${userId}`);
                 socket.disconnect(true);
@@ -362,9 +366,9 @@ function initSocketIO() {
 
         // --- Game Message Handlers ---
         socket.on(MessageTypeFPS.PLAYER_INPUT_FPS, (inputData) => {
-            console.log(`[Input Received] User: ${associatedUserId}, Seq: ${inputData?.sequence}, Keys: ${JSON.stringify(inputData?.keys)}`); // Log receipt
             if (!associatedUserId || !players[associatedUserId] || players[associatedUserId].state !== 'alive') {
                 // Ignore input if player isn't identified, doesn't exist, or isn't alive
+                console.error(`[Input IGNORED] for socket ${socket.id}. Reason: associatedUserId=${associatedUserId}, playerExists=${!!players[associatedUserId]}, playerState=${players[associatedUserId]?.state}`);
                 return;
             }
 
@@ -388,7 +392,7 @@ function initSocketIO() {
             }
 
             // --- Apply Input to Physics ---
-            applyMovementInputToPlayer(associatedUserId, players[associatedUserId].rapierBody, keys, lookQuat, deltaTime);
+            handlePlayerInput(associatedUserId, inputData);
 
             // --- Update Server State ---
             players[associatedUserId].lastProcessedSequence = sequence; // Acknowledge processing this input sequence
@@ -800,28 +804,10 @@ function startGameLoop() {
     gameLoopInterval = setInterval(() => {
         const tickStart = performance.now();
 
-        // Log pre-physics step velocities for alive players
-        for (const playerId in players) {
-            const playerState = players[playerId];
-            if (playerState.state === 'alive' && playerState.rapierBody) {
-                const vel = playerState.rapierBody.linvel();
-                console.log(`[Pre-Physics] ${playerId} Vel: x:${vel.x.toFixed(2)}, y:${vel.y.toFixed(2)}, z:${vel.z.toFixed(2)}`);
-            }
-        }
-
         // 1. Step Physics World
         if (rapierWorld) {
             rapierWorld.step();
             // TODO: Process collision events here (for ground checks, semtex stick, etc.)
-        }
-
-        // Log post-physics step velocities for alive players
-        for (const playerId in players) {
-            const playerState = players[playerId];
-            if (playerState.state === 'alive' && playerState.rapierBody) {
-                const vel = playerState.rapierBody.linvel();
-                console.log(`[Post-Physics] ${playerId} Vel: x:${vel.x.toFixed(2)}, y:${vel.y.toFixed(2)}, z:${vel.z.toFixed(2)}`);
-            }
         }
 
         // 2. Update Player States from Physics & Handle Game Logic
@@ -833,10 +819,8 @@ function startGameLoop() {
 
                 // Update position/velocity from Rapier body
                 const pos = playerState.rapierBody.translation();
-                const rot = playerState.rapierBody.rotation();
                 const vel = playerState.rapierBody.linvel();
                 playerState.position = { x: pos.x, y: pos.y, z: pos.z };
-                playerState.rotation = { x: rot.x, y: rot.y, z: rot.z, w: rot.w };
                 playerState.velocity = { x: vel.x, y: vel.y, z: vel.z };
 
                 // Check ground status (needs collision event processing)
@@ -1048,27 +1032,41 @@ function applyMovementInputToPlayer(playerId, playerBody, keys, lookQuat, deltaT
 
     // Apply force
     const currentLinvel = playerBody.linvel();
+    
+    // Apply damping to current velocity for smoother movement (match client)
+    const dampedVelocity = {
+        x: currentLinvel.x * DAMPING_FACTOR,
+        y: currentLinvel.y, // Don't damp Y velocity (gravity/jumping)
+        z: currentLinvel.z * DAMPING_FACTOR
+    };
+    
+    // Calculate force needed to reach desired velocity
     let force = { x: 0, y: 0, z: 0 };
-    const velocityDiffX = desiredVelocity.x - currentLinvel.x;
-    const velocityDiffZ = desiredVelocity.z - currentLinvel.z;
+    const velocityDiffX = desiredVelocity.x - dampedVelocity.x;
+    const velocityDiffZ = desiredVelocity.z - dampedVelocity.z;
 
-    force.x = velocityDiffX * ACCELERATION_FORCE * deltaTime;
-    force.z = velocityDiffZ * ACCELERATION_FORCE * deltaTime;
+    // Use smaller, smoother force application (match client)
+    force.x = velocityDiffX * ACCELERATION_FORCE * deltaTime * 0.5; // Reduced force multiplier
+    force.z = velocityDiffZ * ACCELERATION_FORCE * deltaTime * 0.5;
 
-    if (!isOnGround) { force.x *= AIR_CONTROL_FACTOR; force.z *= AIR_CONTROL_FACTOR; }
+    if (!isOnGround) { 
+        force.x *= AIR_CONTROL_FACTOR; 
+        force.z *= AIR_CONTROL_FACTOR; 
+    }
 
+    // Clamp force magnitude for stability
     const forceMagnitude = Math.sqrt(force.x**2 + force.z**2);
     if (forceMagnitude > MAX_ACCEL_FORCE) {
         const scale = MAX_ACCEL_FORCE / forceMagnitude;
-        force.x *= scale; force.z *= scale;
+        force.x *= scale; 
+        force.z *= scale;
     }
 
-    // DETAILED LOGGING FOR FORCES
-    console.log(`[ForceCalc] Player: ${playerId}, Tick: ${players[playerId].lastProcessedSequence}, Keys: ${JSON.stringify(keys)}`);
-    console.log(`[ForceCalc] CurrentVel: x:${currentLinvel.x.toFixed(2)}, z:${currentLinvel.z.toFixed(2)}, DesiredVel: x:${desiredVelocity.x.toFixed(2)}, z:${desiredVelocity.z.toFixed(2)}`);
-    console.log(`[ForceCalc] AppliedForce: x:${force.x.toFixed(2)}, y:${force.y.toFixed(2)}, z:${force.z.toFixed(2)}, IsOnGround: ${isOnGround}`);
-
-    playerBody.applyImpulse(force, true);
+    // Apply the smoothed velocity first, then the force (match client)
+    playerBody.setLinvel(dampedVelocity, true);
+    if (forceMagnitude > 0.1) { // Only apply force if it's significant
+        playerBody.applyImpulse(force, true);
+    }
 
     // Jumping
     if (keys.Space && canJump) {
@@ -1171,10 +1169,16 @@ function updateGroundStatus(playerId) {
 
 // --- Match Lifecycle ---
 function checkStartMatch() {
-    if (currentMatchState === 'waiting' && Object.keys(connectedPlayers).length === 2) {
-        console.log('Both players connected. Starting match countdown...');
-        // TODO: Implement countdown logic (Phase 3)
+    // NEW LOGGING
+    console.log(`[Match Check] Checking start conditions. State: ${currentMatchState}, Connected: ${Object.keys(connectedPlayers).length}`);
+    const isReady = currentMatchState === 'waiting';
+    const hasEnoughPlayers = Object.keys(connectedPlayers).length === 2;
+
+    if (isReady && hasEnoughPlayers) {
+        console.log('✅ Conditions MET. Starting match countdown...');
         startMatchCountdown();
+    } else {
+        console.log(`❌ Conditions NOT MET. isReady=${isReady}, hasEnoughPlayers=${hasEnoughPlayers}`);
     }
 }
 
@@ -1215,24 +1219,27 @@ function respawnPlayer(playerId) {
 
     // Find spawn point using map config
     const mapConfig = MAP_CONFIGS_FPS[config.mapId];
-    const spawnPoints = mapConfig?.physicsData?.spawnPoints || [{x: 1, y: 4, z: 0}]; // Default spawn
-    // Simple alternating spawn (needs refinement for fairness)
+    // Provide a safe fallback with two distinct points
+    const spawnPoints = mapConfig?.physicsData?.spawnPoints || [{x: 1, y: 4, z: -5}, {x: 1, y: 4, z: 5}];
+    
     const p1Id = config.playersInfo.p1.userId;
-    const p2Id = config.playersInfo.p2.userId;
-    let spawnIndex = 0;
-     if (playerId === p1Id) spawnIndex = (playerState.deaths) % spawnPoints.length; // Example: cycle spawns based on deaths
-     if (playerId === p2Id) spawnIndex = (playerState.deaths + Math.floor(spawnPoints.length / 2)) % spawnPoints.length; // Try to spawn opponent away
 
-    // Ensure spawnIndex is valid
-    spawnIndex = Math.min(spawnPoints.length - 1, Math.max(0, Math.floor(spawnIndex)));
-    const spawnPoint = spawnPoints[spawnIndex];
+    // Simplified and more robust spawn selection for 1v1.
+    // Player 1 uses the first spawn point, Player 2 uses the second.
+    // This ensures they are always in different spots and is less error-prone
+    // than cycling based on deaths.
+    const spawnIndex = (playerId === p1Id) ? 0 : 1;
+    
+    // Ensure the spawn index is always valid, even if spawnPoints array is misconfigured
+    const finalSpawnIndex = spawnIndex % spawnPoints.length;
 
-    console.log(`DEBUG: Respawning ${playerId} - Raw spawnPoints from config: ${JSON.stringify(mapConfig?.physicsData?.spawnPoints)}. Selected index: ${spawnIndex}. Final spawnPoint for physics: ${JSON.stringify(spawnPoint)}`); // DEBUG LOG
+    const spawnPoint = spawnPoints[finalSpawnIndex];
 
-    console.log(`Respawning ${playerId} at index ${spawnIndex}: ${JSON.stringify(spawnPoint)}`);
+    console.log(`[Respawn] Map config spawnPoints: ${JSON.stringify(spawnPoints)}`);
+    console.log(`[Respawn] ${playerId} (p1=${playerId === p1Id}) using spawn index ${finalSpawnIndex}: ${JSON.stringify(spawnPoint)}`);
 
     // Reset State using Character Config
-    const charConfig = CHARACTER_CONFIG_FPS[CharacterId.CHAR_A];
+    const charConfig = CHARACTER_CONFIG_FPS[playerState.characterId];
     playerState.state = 'alive';
     playerState.health = charConfig.baseHealth;
     playerState.shield = charConfig.baseShield; // Reset shield based on character
@@ -1262,20 +1269,27 @@ function respawnPlayer(playerId) {
     // Reset Physics Body
     if (playerState.rapierBody) {
         resetPlayerPhysics(playerState.rapierBody, spawnPoint);
+        console.log(`[Respawn] Reset existing physics body for ${playerId}`);
     } else {
          // Create body if it doesn't exist yet (first spawn)
          playerState.rapierBody = createPlayerPhysicsBody(playerId, spawnPoint);
          if (!playerState.rapierBody) {
              console.error(`Failed to create physics body for ${playerId} on respawn!`);
              // Handle error state?
+         } else {
+             console.log(`[Respawn] Created new physics body for ${playerId}`);
          }
     }
+    
+    // Verify the physics body position matches our spawn point
+    if (playerState.rapierBody) {
+        const actualPos = playerState.rapierBody.translation();
+        console.log(`[Respawn] ${playerId} physics body at: ${actualPos.x.toFixed(2)}, ${actualPos.y.toFixed(2)}, ${actualPos.z.toFixed(2)}`);
+    }
 
-    // Broadcast needed immediately if spawning during active gameplay
-     if (currentMatchState === 'in_progress') {
-        broadcastGameState();
-     }
-    console.log(`${playerId} respawned.`);
+    // Always broadcast state after respawn to ensure clients get updated positions
+    broadcastGameState();
+    console.log(`[Respawn] ${playerId} respawned and state broadcasted.`);
 }
 
 // Helper function for resetting physics (Plan 3.2.1)
@@ -1293,4 +1307,4 @@ function resetPlayerPhysics(rapierBody, position) {
 initialize().catch(err => {
     console.error("Initialization failed:", err);
     process.exit(1);
-}); 
+});
