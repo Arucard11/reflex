@@ -19,9 +19,13 @@ const getTestMatchData = (matchId) => {
     };
 };
 
-export default function TestFpsPage() {
+const TestFPSPage = () => {
     const router = useRouter();
-    const matchId = (router.query.matchId || 'test-match-placeholder');
+
+    // Use a fixed matchId for testing that matches the server test script
+    const matchId = 'test-match-12345';
+    const serverIp = 'localhost'; // Or your server's IP
+    const serverPort = 3001; // Match the port in run_server_test.sh
 
     const [gameProps, setGameProps] = useState(null);
     const [isPlayerTwo, setIsPlayerTwo] = useState(false); // Track which player this browser simulates
@@ -98,4 +102,6 @@ export default function TestFpsPage() {
             />
         </div>
     );
-} 
+}
+
+export default TestFPSPage; 

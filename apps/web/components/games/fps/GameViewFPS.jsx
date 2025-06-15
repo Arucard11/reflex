@@ -19,10 +19,11 @@ import {
     interactionGroups
 } from '@shared-types/game-fps';
 import DebugControls from './DebugControls'; // Import DebugControls
+import HUD from './HUD'; // NEW: Import the HUD component
 
 // NEW: Player Physics Dimensions Constants (must match server)
-const PLAYER_VISUAL_TOTAL_HEIGHT = 0.9; // New smaller height for visual alignment
-const PLAYER_VISUAL_RADIUS = 0.2;       // New smaller radius (used for client physics body)
+const PLAYER_VISUAL_TOTAL_HEIGHT = 0.5; // New smaller height for visual alignment
+const PLAYER_VISUAL_RADIUS = 0.12;       // New smaller radius (used for client physics body)
 
 // Define props based on Universal Standard (II.1)
 function GameViewFPS({
@@ -60,6 +61,9 @@ function GameViewFPS({
     const playerAnimationActionsRef = useRef({});
     const remotePlayerAnimationActionsRef = useRef({}); // Add remote player animations ref
     const renderLoopIdRef = useRef(null); // Ref for render loop ID
+    const projectilesRef = useRef(new Map()); // NEW: For tracking projectile meshes
+    const projectilePoolRef = useRef([]); // NEW: For reusing projectile meshes
+    const activeVisualProjectilesRef = useRef([]); // NEW: For animating visual projectiles
 
     // State for loading/connection status
     const [isLoading, setIsLoading] = useState(true);
@@ -79,6 +83,8 @@ function GameViewFPS({
         sequence: 0,
         pendingInputs: [],
         isAiming: false, // NEW: Track right mouse button state
+        isFiring: false, // NEW: Track left mouse button state for firing
+        lastFireTime: 0, // NEW: Track client-side fire rate
         // NEW: Separate mouse look components
         cameraPitch: 0, // Up/down rotation for camera
         characterYaw: 0, // Left/right rotation for character
@@ -92,6 +98,13 @@ function GameViewFPS({
         isOrbital: false
     });
 
+    // NEW: Add recoil recovery state
+    const recoilStateRef = useRef({
+        pitch: 0,
+        yaw: 0,
+        recoverySpeed: 4, // default, will be updated by weapon
+    });
+
     // NEW: Add smoothing state for better interpolation
     const smoothingStateRef = useRef({
         lastServerUpdate: 0,
@@ -102,12 +115,12 @@ function GameViewFPS({
     });
 
     // --- Client-Side Prediction & Movement Engine ---
-    const applyInputPhysics = useCallback((playerBody, inputKeys, inputLookQuat, physicsDeltaTime) => {
+    const applyInputPhysics = useCallback((playerBody, inputKeys, inputLookQuat, physicsDeltaTime, isOnGround) => {
         if (!playerBody || physicsDeltaTime <= 0) return;
         
         // Reduced speeds and forces for smoother movement
-        const walkSpeed = 10; // Further reduced from 3.0
-        const runSpeed = 20; // Further reduced from 5.0
+        const walkSpeed = 5; // Further reduced from 3.0
+        const runSpeed = 10; // Further reduced from 5.0
         const jumpImpulse = 5.0; // Further reduced from 6.0
         const accelerationForce = 800.0; // Further reduced from 1200.0
         const maxAccelForce = 20.0; // Further reduced from 30.0
@@ -118,13 +131,14 @@ function GameViewFPS({
         let moveDirection = new THREE.Vector3(0, 0, 0);
         let isMoving = false;
         
-        const _lookQuat = new THREE.Quaternion(inputLookQuat.x, inputLookQuat.y, inputLookQuat.z, inputLookQuat.w);
-        const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(_lookQuat);
-        const right = new THREE.Vector3(1, 0, 0).applyQuaternion(_lookQuat);
-        forward.y = 0; 
-        right.y = 0; 
-        forward.normalize(); 
-        right.normalize();
+        // FIX: Use only the character yaw for movement direction, not the full look quaternion
+        // This ensures the character moves forward relative to their body orientation, not camera pitch
+        const characterYawQuat = new THREE.Quaternion();
+        characterYawQuat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), inputStateRef.current.characterYaw);
+        
+        const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(characterYawQuat);
+        const right = new THREE.Vector3(1, 0, 0).applyQuaternion(characterYawQuat);
+        // No need to zero Y or normalize since we're using pure yaw rotation
         
         if (inputKeys.W) { moveDirection.add(forward); isMoving = true; }
         if (inputKeys.S) { moveDirection.sub(forward); isMoving = true; }
@@ -174,7 +188,7 @@ function GameViewFPS({
         }
         
         // Jumping - reduced impulse for smoother feel
-        if (inputKeys.Space /* && isOnGround */) {
+        if (inputKeys.Space && isOnGround) {
             playerBody.applyImpulse({ x: 0, y: jumpImpulse, z: 0 }, true);
         }
         
@@ -260,27 +274,24 @@ function GameViewFPS({
                         inputStateRef.current.keys.Shift = true; 
                         break;
                     case 'KeyC': inputStateRef.current.keys.C = true; break; // Camera toggle still needs lock
-                    // --- ADDED: Reload Key 'R' --- 
-                    case 'KeyR': // Reload Action
-                        inputStateRef.current.keys.Reload = true; // Track key state
-                        // Get current game state and player state
+                    case 'KeyQ': // NEW: Weapon Switch Key
+                        inputStateRef.current.keys.WeaponSwitch = true;
+                        // Send immediately, no need to hold
+                        socketRef.current?.emit(MessageTypeFPS.SWITCH_WEAPON_FPS);
+                        break;
+                    case 'KeyR':
+                        inputStateRef.current.keys.Reload = true;
+                        // Client-side logic to request a reload
                         const localPlayerState = gameStateRef.current?.players?.[localPlayerUserId];
-                        if (localPlayerState && localPlayerState.state === 'alive' && !localPlayerState.isReloading) {
-                            const activeWeaponId = localPlayerState.weaponSlots?.[localPlayerState.activeWeaponSlot];
+                        if (localPlayerState && !localPlayerState.isReloading) {
+                            const activeWeaponId = localPlayerState.weaponSlots[localPlayerState.activeWeaponSlot];
                             const weaponConfig = WEAPON_CONFIG_FPS[activeWeaponId];
-
-                            if (activeWeaponId && weaponConfig && localPlayerState.currentAmmoInClip < weaponConfig.ammoCapacity) {
+                            if (weaponConfig && localPlayerState.currentAmmoInClip < weaponConfig.ammoCapacity) {
+                                console.log("Client: Requesting reload...");
                                 socketRef.current?.emit(MessageTypeFPS.RELOAD_WEAPON_FPS);
-                                
-                                // Play FPV reload animation immediately (non-looping)
-                                // IMPORTANT: Ensure your FPV GLB model for 'activeWeaponId' has an animation named 'reload'
-                                playFpvAnimation(activeWeaponId, 'reload', false); 
-                            } else {
                             }
-                        } else {
                         }
                         break;
-                    // Add other game action keys here...
                 }
             }
         };
@@ -313,11 +324,12 @@ function GameViewFPS({
                             cameraModeRef.current.isThirdPerson = !cameraModeRef.current.isThirdPerson;
                         }
                         inputStateRef.current.keys.C = false; break;
-                    // --- ADDED: Reload Key 'R' --- 
-                    case 'KeyR': 
-                        inputStateRef.current.keys.Reload = false; // Untrack key state
+                    case 'KeyQ': // NEW: Weapon Switch Key
+                        inputStateRef.current.keys.WeaponSwitch = false;
                         break;
-                    // Add other keys later
+                    case 'KeyR':
+                        inputStateRef.current.keys.Reload = false;
+                        break;
                 }
             }
         };
@@ -330,31 +342,69 @@ function GameViewFPS({
             const movementY = event.movementY || 0;
             const sensitivity = 0.002; // Increased sensitivity for better responsiveness
 
-            // NEW: Update separate pitch and yaw values
-            inputStateRef.current.cameraPitch -= movementY * sensitivity;
+            // Update separate pitch and yaw values from raw input
+            inputStateRef.current.cameraPitch += movementY * sensitivity; // Fixed: Changed -= to += to fix inverted Y-axis
             inputStateRef.current.characterYaw -= movementX * sensitivity;
 
             // Clamp camera pitch to prevent over-rotation
             inputStateRef.current.cameraPitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, inputStateRef.current.cameraPitch));
 
-            // Create camera quaternion from pitch and yaw
-            const cameraEuler = new THREE.Euler(inputStateRef.current.cameraPitch, inputStateRef.current.characterYaw, 0, 'YXZ');
+            // Create TOTAL visual rotation including recoil for the camera
+            const totalPitch = inputStateRef.current.cameraPitch + recoilStateRef.current.pitch;
+            const totalYaw = inputStateRef.current.characterYaw + recoilStateRef.current.yaw;
+            const cameraEuler = new THREE.Euler(totalPitch, totalYaw, 0, 'YXZ');
             const targetCameraQuaternion = new THREE.Quaternion().setFromEuler(cameraEuler);
             
-            // Smooth camera rotation
-            cameraRef.current.quaternion.slerp(targetCameraQuaternion, 0.3);
+            // NEW: Use direct assignment to remove camera sway and make movement instant
+            cameraRef.current.quaternion.copy(targetCameraQuaternion);
 
-            // Create character quaternion (yaw only for body rotation)
-            const characterEuler = new THREE.Euler(0, inputStateRef.current.characterYaw, 0, 'YXZ');
-            const characterQuaternion = new THREE.Quaternion().setFromEuler(characterEuler);
+            // Create the look quaternion for the server from the raw input pitch and yaw (NO recoil).
+            // This ensures the server knows the exact aiming direction, including vertical angle, for authoritative actions like shooting.
+            const lookEuler = new THREE.Euler(inputStateRef.current.cameraPitch, inputStateRef.current.characterYaw, 0, 'YXZ');
+            const lookQuaternion = new THREE.Quaternion().setFromEuler(lookEuler);
 
-            // Update input state quaternion for server (this represents the character's body orientation)
+            // Update input state quaternion for server
             inputStateRef.current.lookQuat = {
-                x: characterQuaternion.x,
-                y: characterQuaternion.y,
-                z: characterQuaternion.z,
-                w: characterQuaternion.w
+                x: lookQuaternion.x,
+                y: lookQuaternion.y,
+                z: lookQuaternion.z,
+                w: lookQuaternion.w
             };
+
+            const localPlayerState = gameStateRef.current?.players[localPlayerUserId];
+            if (localPlayerState) {
+                const activeWeaponId = localPlayerState.weaponSlots[localPlayerState.activeWeaponSlot];
+                const weaponConfig = WEAPON_CONFIG_FPS[activeWeaponId];
+
+                // Firing logic
+                if (localPlayerState.state === 'alive' && !localPlayerState.isReloading && localPlayerState.currentAmmoInClip > 0 && inputStateRef.current.isFiring) {
+                    const now = performance.now();
+                    if (now - inputStateRef.current.lastFireTime >= weaponConfig.fireRate) {
+                        inputStateRef.current.lastFireTime = now;
+                        socketRef.current?.emit(MessageTypeFPS.PLAYER_FIRE_FPS, { sequence: inputStateRef.current.sequence });
+                        playFpvAnimation(activeWeaponId, 'fire', false);
+
+                        // Apply Visual Recoil to the recoil state, not the input state
+                        const recoilUp = weaponConfig.visualRecoilUp || 0.1;
+                        const recoilSide = weaponConfig.visualRecoilSide || 0.05;
+                        recoilStateRef.current.pitch += recoilUp; // Kick camera up
+                        recoilStateRef.current.yaw += (Math.random() - 0.5) * recoilSide; // Kick camera sideways
+                    }
+                }
+
+                // Reload Animation Logic
+                if (localPlayerState.isReloading) {
+                    // playFpvAnimation handles not re-playing an animation, so this is safe to call continuously
+                    playFpvAnimation(activeWeaponId, 'reload', false);
+                } else {
+                    // If we are NOT reloading, but the reload animation IS playing, interrupt it by switching to idle.
+                    // This handles cases where a reload is cancelled by the server (e.g. by switching weapons).
+                    const currentAction = currentFpvActionRef.current;
+                    if (currentAction && currentAction.getClip().name.includes('reload') && !currentAction.paused) {
+                         playFpvAnimation(activeWeaponId, 'idle', true);
+                    }
+                }
+            }
         };
 
         const handlePointerLockChange = () => {
@@ -365,11 +415,17 @@ function GameViewFPS({
 
         // NEW: Mouse Down/Up for Aiming
         const handleMouseDown = (event) => {
+            if (event.button === 0) { // Left mouse button
+                inputStateRef.current.isFiring = true;
+            }
             if (event.button === 2) { // Right mouse button
                 inputStateRef.current.isAiming = true;
             }
         };
         const handleMouseUp = (event) => {
+            if (event.button === 0) { // Left mouse button
+                inputStateRef.current.isFiring = false;
+            }
             if (event.button === 2) {
                 inputStateRef.current.isAiming = false;
             }
@@ -392,6 +448,7 @@ function GameViewFPS({
                 if (previousAction) {
                     previousAction.fadeOut(0.2); // Fade out previous action
                 }
+                
                 newAction
                     .reset()
                     .setEffectiveTimeScale(1)
@@ -402,6 +459,19 @@ function GameViewFPS({
                 if (!loop) {
                     newAction.clampWhenFinished = true;
                     newAction.loop = THREE.LoopOnce;
+                    
+                    // NEW: When a non-looping animation finishes, transition back to idle
+                    const onFinished = (e) => {
+                        if (e.action === newAction) {
+                            // Play the idle animation once the fire/reload animation is done
+                            playFpvAnimation(weaponId, 'idle', true); 
+                            mixer.removeEventListener('finished', onFinished);
+                        }
+                    };
+                    mixer.addEventListener('finished', onFinished);
+
+                } else {
+                    newAction.loop = THREE.LoopRepeat;
                 }
 
                 currentFpvActionRef.current = newAction; // Update FPV action ref
@@ -441,7 +511,7 @@ function GameViewFPS({
                 sceneRef.current = new THREE.Scene();
                 sceneRef.current.background = new THREE.Color(0x6699cc); // Example sky blue
 
-                cameraRef.current = new THREE.PerspectiveCamera(75, canvasElement.clientWidth / canvasElement.clientHeight, 0.1, 1000);
+                cameraRef.current = new THREE.PerspectiveCamera(65, canvasElement.clientWidth / canvasElement.clientHeight, 0.1, 1000);
                 cameraRef.current.position.set(0, 1.6, 5); // Initial placeholder position
                 sceneRef.current.add(cameraRef.current);
 
@@ -494,16 +564,24 @@ function GameViewFPS({
 
                 // Log all animation names for the local character model
                 if (localCharacterGltf.animations && localCharacterGltf.animations.length > 0) {
+                    console.log('--- AVAILABLE LOCAL PLAYER ANIMATIONS ---');
                     localCharacterGltf.animations.forEach((clip, idx) => {
+                        console.log(`[${idx}]: ${clip.name}`);
                     });
+                    console.log('------------------------------------');
                 } else {
+                    console.log('--- NO LOCAL PLAYER ANIMATIONS FOUND ---');
                 }
 
                 // Log all animation names for the remote character model
                 if (remoteCharacterGltf.animations && remoteCharacterGltf.animations.length > 0) {
+                    console.log('--- AVAILABLE REMOTE PLAYER ANIMATIONS ---');
                     remoteCharacterGltf.animations.forEach((clip, idx) => {
+                        console.log(`[${idx}]: ${clip.name}`);
                     });
+                    console.log('-----------------------------------------');
                 } else {
+                    console.log('--- NO REMOTE PLAYER ANIMATIONS FOUND ---');
                 }
 
                 // Store animations for both players
@@ -554,7 +632,7 @@ function GameViewFPS({
                 };
 
                 // Apply 14% size reduction (scale by 0.86)
-                const characterScale = 0.40;
+                const characterScale = 0.30;
                 localPlayerRef.current.mesh.scale.setScalar(characterScale);
                 remotePlayerRef.current.mesh.scale.setScalar(characterScale);
 
@@ -672,10 +750,14 @@ function GameViewFPS({
                         // Process animations if any
                         const weaponAnimations = {};
                         if (fpvGltf.animations && fpvGltf.animations.length > 0) {
+                            console.log(`--- AVAILABLE FPV ANIMATIONS for ${weaponId} ---`);
                             fpvGltf.animations.forEach((clip, idx) => {
                                 weaponAnimations[clip.name] = clip;
+                                console.log(`[${idx}]: ${clip.name}`);
                             });
+                            console.log('-----------------------------------------');
                         } else {
+                            console.log(`--- NO FPV ANIMATIONS FOUND for ${weaponId} ---`);
                         }
 
                         weaponGroup.traverse(node => {
@@ -699,7 +781,7 @@ function GameViewFPS({
 
                         // Set the actual FPV weapon position
                         weaponGroup.position.set(0.12, -0.18, -0.01); // Default FPV: Right, Down, Close
-                        weaponGroup.scale.set(.37, .37, .37);
+                        weaponGroup.scale.set(.10, .10, .10);
                         weaponGroup.rotation.set(0, Math.PI, 0);
 
                         weaponGroup.visible = false; // Hide initially
@@ -713,6 +795,17 @@ function GameViewFPS({
                 // Assign to ref
                 fpvElementsRef.current.grappleRopeMaterial = new THREE.LineBasicMaterial({ color: 0xffffff, linewidth: 2 });
                 
+                // --- NEW: Create Projectile Pool ---
+                const projectileGeometry = new THREE.SphereGeometry(0.05, 8, 8);
+                const projectileMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+                for (let i = 0; i < 50; i++) { // Create a pool of 50 projectiles
+                    const projectileMesh = new THREE.Mesh(projectileGeometry, projectileMaterial);
+                    projectileMesh.visible = false;
+                    sceneRef.current.add(projectileMesh);
+                    projectilePoolRef.current.push(projectileMesh);
+                }
+                // --- End Projectile Pool ---
+
                 // --- Rapier Setup ---
                 await RAPIER.init();
                 if (!isMounted) return; // Check after await
@@ -799,7 +892,7 @@ function GameViewFPS({
                 // --- Render Loop ---
                 let lastTimestamp = performance.now();
                 const clock = new THREE.Clock(); // Use Clock for mixer updates
-                const thirdPersonOffset = new THREE.Vector3(0, 1.5, -1.2); // Camera offset behind player - closer to character
+                const thirdPersonOffset = new THREE.Vector3(-0.1, 0.6, -1); // FPS third-person: Over left shoulder, character closer to center
                 const tempPlayerPos = new THREE.Vector3(); // Temporary vectors for calculations
                 const tempCameraPos = new THREE.Vector3();
                 const tempLookAt = new THREE.Vector3();
@@ -815,10 +908,71 @@ function GameViewFPS({
                     // Get Local Player State
                     const localState = gameStateRef.current?.players?.[localPlayerUserId];
 
+                    // --- NEW: Visual Projectile Animation ---
+                    const stillActiveProjectiles = [];
+                    for (const proj of activeVisualProjectilesRef.current) {
+                        // Move projectile towards its target
+                        const direction = proj.target.clone().sub(proj.mesh.position).normalize();
+                        const distance = proj.mesh.position.distanceTo(proj.target);
+                        const moveDistance = proj.speed * deltaTime;
+
+                        if (distance <= moveDistance) {
+                            // Reached target, return to pool
+                            proj.mesh.visible = false;
+                            projectilePoolRef.current.push(proj.mesh);
+                        } else {
+                            proj.mesh.position.add(direction.multiplyScalar(moveDistance));
+                            stillActiveProjectiles.push(proj);
+                        }
+                    }
+                    activeVisualProjectilesRef.current = stillActiveProjectiles;
+                    // --- End Visual Projectile Animation ---
+
                     // Get active weapon ID from game state for FPV model visibility
                     let activeWeaponId = null;
                     if (localState && localState.weaponSlots && localState.activeWeaponSlot !== undefined) {
                         activeWeaponId = localState.weaponSlots[localState.activeWeaponSlot];
+                    }
+
+                    // --- Recoil Recovery Logic ---
+                    if (activeWeaponId) {
+                        const weaponConfig = WEAPON_CONFIG_FPS[activeWeaponId];
+                        if (weaponConfig) {
+                            const recoverySpeed = weaponConfig.recoilRecoverySpeed;
+                            // Recover pitch
+                            if (recoilStateRef.current.pitch > 0) {
+                                const pitchRecovery = recoilStateRef.current.pitch * recoverySpeed * deltaTime;
+                                recoilStateRef.current.pitch -= pitchRecovery;
+                            } else {
+                                recoilStateRef.current.pitch = 0;
+                            }
+                            // Recover yaw
+                            if (Math.abs(recoilStateRef.current.yaw) > 0.001) {
+                                const yawRecovery = recoilStateRef.current.yaw * recoverySpeed * deltaTime;
+                                recoilStateRef.current.yaw -= yawRecovery;
+                            } else {
+                                recoilStateRef.current.yaw = 0;
+                            }
+                        }
+                    }
+
+                    // FPV Weapon Aiming Logic
+                    if (fpvElementsRef.current.camera) {
+                        const fpvCam = fpvElementsRef.current.camera;
+                        const defaultFov = 60;
+                        const zoomFov = 30; // Example zoom FOV
+                        const fov = inputStateRef.current.isAiming ? zoomFov : defaultFov;
+
+                        // Smooth FOV transition
+                        if (Math.abs(fpvCam.fov - fov) > 0.1) {
+                            fpvCam.fov += (fov - fpvCam.fov) * 0.2;
+                            fpvCam.updateProjectionMatrix();
+                        }
+
+                        // Update mixer for the active weapon
+                        if (activeWeaponId && fpvElementsRef.current.weaponModels[activeWeaponId]?.mixer) {
+                            fpvElementsRef.current.weaponModels[activeWeaponId].mixer.update(mixerDeltaTime);
+                        }
                     }
 
                     // >>> NEW: Send Input State Periodically <<<
@@ -853,7 +1007,13 @@ function GameViewFPS({
                     // 1. Apply Local Input Prediction (Before stepping world)
                     if (localPlayerRef.current.rapierBody && localState && localState.state === 'alive') {
                         // Apply physics using the helper function
-                        applyInputPhysics(localPlayerRef.current.rapierBody, inputStateRef.current.keys, inputStateRef.current.lookQuat, deltaTime);
+                        applyInputPhysics(
+                            localPlayerRef.current.rapierBody,
+                            inputStateRef.current.keys,
+                            inputStateRef.current.lookQuat,
+                            deltaTime,
+                            localState.isOnGround // NEW: Pass ground status
+                        );
                     }
 
                     // 2. Step Client Physics World
@@ -875,20 +1035,25 @@ function GameViewFPS({
                         
                         let targetAnim = null;
 
-                        // Use the actual animation names from the GLB file
-                        if (keys.W && keys.Shift) {
-                            targetAnim = 'runFowardFire'; // Note: GLB has typo "Foward" instead of "Forward"
-                        } else if (keys.W) {
-                            targetAnim = 'walkForward';
-                        } else if (keys.S) {
-                            targetAnim = 'walkBackward';
-                        } else if (keys.A) {
-                            targetAnim = 'strafeLeft';
-                        } else if (keys.D) {
-                            targetAnim = 'strafeRight';
+                        // >>> NEW: Prioritize action animations over movement <<<
+                        if (localState && localState.isReloading) {
+                            targetAnim = 'reloadIdle'; // Assuming 'reloadIdle' from mapping is for 3p model too
                         } else {
-                            // Use logical 'idle' - mapping will convert to correct GLB animation
-                            targetAnim = 'idle';
+                            // Use the actual animation names from the GLB file
+                            if (keys.W && keys.Shift) {
+                                targetAnim = 'runFowardFire'; // Note: GLB has typo "Foward" instead of "Forward"
+                            } else if (keys.W) {
+                                targetAnim = 'walkForward';
+                            } else if (keys.S) {
+                                targetAnim = 'walkBackward';
+                            } else if (keys.A) {
+                                targetAnim = 'strafeLeft';
+                            } else if (keys.D) {
+                                targetAnim = 'strafeRight';
+                            } else {
+                                // Use logical 'idle' - mapping will convert to correct GLB animation
+                                targetAnim = 'idle';
+                            }
                         }
 
                         // Enhanced DEBUG: Log available animations and target animation
@@ -1104,7 +1269,7 @@ function GameViewFPS({
                         }
                     }
 
-                    // --- Update Player Mesh Visibility & Position (Placeholder) ---
+                    // --- Update Player Mesh Visibility & Position (FPS Optimized) ---
                     if (localPlayerRef.current.mesh) {
                         localPlayerRef.current.mesh.visible = cameraModeRef.current.isThirdPerson;
                         // NEW: Update mesh from predicted Rapier body state
@@ -1123,20 +1288,19 @@ function GameViewFPS({
                                 predictedPos.z
                             );
 
-                            // Smooth position
-                            localPlayerRef.current.mesh.position.lerp(targetPosition, 0.4); // Increased smoothing
+                            // Fast position update for responsive FPS feel
+                            localPlayerRef.current.mesh.position.lerp(targetPosition, 0.8);
 
-                            // NEW: Use character yaw for mesh rotation (not physics body rotation)
-                            // The physics body rotation is locked to prevent tipping, but the visual mesh should rotate with mouse yaw
+                            // FPS CHARACTER ROTATION: Character should instantly face camera's horizontal direction
+                            // In FPS games, the character model rotates immediately to match camera yaw
                             const characterYawQuaternion = new THREE.Quaternion();
                             characterYawQuaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), inputStateRef.current.characterYaw);
                             
-                            // Smooth mesh rotation using character yaw
-                            localPlayerRef.current.mesh.quaternion.slerp(characterYawQuaternion, 0.4);
+                            // Instant rotation for FPS responsiveness (no lerp/slerp)
+                            localPlayerRef.current.mesh.quaternion.copy(characterYawQuaternion);
 
                         } else if (localState && localState.position && localState.rotation) {
                             // Fallback to lerping server state if body missing (e.g., before spawn)
-                            // This part already uses lerp/slerp, which is good.
                             const localCharConfig = CHARACTER_CONFIG_FPS[localPlayerCharacterId];
                             const localCharacterVisualYOffset = localCharConfig?.visualYOffset || 0.0;
                             const totalCapsuleHalfHeightForVisuals = PLAYER_VISUAL_TOTAL_HEIGHT / 2;
@@ -1145,11 +1309,11 @@ function GameViewFPS({
                                 localState.position.y - totalCapsuleHalfHeightForVisuals + localCharacterVisualYOffset,
                                 localState.position.z
                             );
-                            localPlayerRef.current.mesh.position.lerp(serverTargetPosition, 0.4); // Increased smoothing
+                            localPlayerRef.current.mesh.position.lerp(serverTargetPosition, 0.8);
                             
                             // Use server rotation for mesh when physics body not available
                             const serverQuaternion = new THREE.Quaternion(localState.rotation.x, localState.rotation.y, localState.rotation.z, localState.rotation.w);
-                            localPlayerRef.current.mesh.quaternion.slerp(serverQuaternion, 0.4);
+                            localPlayerRef.current.mesh.quaternion.copy(serverQuaternion);
                         }
                     }
                     if (remotePlayerRef.current.mesh) {
@@ -1196,16 +1360,37 @@ function GameViewFPS({
                     // --- Camera Controls Setup ---
                     // OrbitControls logic removed, handled by DebugControls
 
-                    // --- Update Camera Position ---
+                    // --- Update Camera Position (FPS Optimized) ---
                     // ONLY update camera based on game state if Orbital mode is OFF
                     if (!cameraModeRef.current.isOrbital) {
                         if (cameraModeRef.current.isThirdPerson && localPlayerRef.current.mesh) {
-                            // Third-person camera logic
+                            // FPS THIRD-PERSON CAMERA: Fast, responsive camera that follows character instantly
+                            // Camera position should follow character position with minimal delay
+                            const characterPos = localPlayerRef.current.mesh.position;
+                            
+                            // Calculate camera offset based on character's yaw rotation (not pitch)
                             tempCameraPos.copy(thirdPersonOffset);
-                            tempCameraPos.applyQuaternion(localPlayerRef.current.mesh.quaternion);
-                            tempCameraPos.add(localPlayerRef.current.mesh.position);
-                            cameraRef.current.position.lerp(tempCameraPos, 0.1);
-                            tempLookAt.copy(localPlayerRef.current.mesh.position).add(new THREE.Vector3(0, 1.0, 0));
+                            const characterYawQuat = new THREE.Quaternion();
+                            characterYawQuat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), inputStateRef.current.characterYaw);
+                            tempCameraPos.applyQuaternion(characterYawQuat);
+                            tempCameraPos.add(characterPos);
+                            
+                            // Fast camera positioning for FPS responsiveness
+                            cameraRef.current.position.lerp(tempCameraPos, 0.6); // Much faster than 0.1
+                            
+                            // Camera should look in the full direction the player is looking (pitch + yaw)
+                            // This gives proper FPS third-person aiming
+                            const lookDirection = new THREE.Vector3(0, 0, 1);
+                            const fullLookQuat = new THREE.Quaternion(
+                                inputStateRef.current.lookQuat.x,
+                                inputStateRef.current.lookQuat.y,
+                                inputStateRef.current.lookQuat.z,
+                                inputStateRef.current.lookQuat.w
+                            );
+                            lookDirection.applyQuaternion(fullLookQuat);
+                            
+                            // Instant camera look direction for FPS precision
+                            tempLookAt.copy(cameraRef.current.position).add(lookDirection.multiplyScalar(10));
                             cameraRef.current.lookAt(tempLookAt);
                         } else {
                             // First-person camera logic (Look handled by mousemove, position follows predicted body)
@@ -1216,8 +1401,8 @@ function GameViewFPS({
                                     predictedPos.y + 1.6, // FPV camera height offset
                                     predictedPos.z
                                 );
-                                // Add smoothing to reduce choppiness
-                                cameraRef.current.position.lerp(targetCameraPos, 0.3);
+                                // Fast position update for FPS responsiveness
+                                cameraRef.current.position.lerp(targetCameraPos, 0.7);
                              } else if (localState && localState.position) {
                                  // Fallback if body not ready
                                 const targetCameraPos = new THREE.Vector3(
@@ -1225,7 +1410,7 @@ function GameViewFPS({
                                     localState.position.y + 1.6,
                                     localState.position.z
                                 );
-                                cameraRef.current.position.lerp(targetCameraPos, 0.3);
+                                cameraRef.current.position.lerp(targetCameraPos, 0.7);
                             }
                         }
                     } else {
@@ -1237,6 +1422,14 @@ function GameViewFPS({
                     if (rendererRef.current && sceneRef.current && cameraRef.current) {
                         // >>> MODIFIED: Only one render call needed <<<
                         rendererRef.current.render(sceneRef.current, cameraRef.current);
+
+                        // NEW: Add the FPV overlay render call
+                        if (isFirstPerson && fpvElementsRef.current.camera) {
+                            rendererRef.current.autoClear = false;
+                            rendererRef.current.clearDepth();
+                            rendererRef.current.render(fpvElementsRef.current.camera, cameraRef.current); // Render FPV Camera objects using main camera's projection
+                            rendererRef.current.autoClear = true;
+                        }
                     }
 
                     if (!localPlayerRef.current.mesh) {
@@ -1275,7 +1468,7 @@ function GameViewFPS({
                         if (retryTimeoutRef.current) clearTimeout(retryTimeoutRef.current);
 
                         // Send identification
-                        newSocket.emit(MessageTypeFPS.IDENTIFY_PLAYER, { userId: localPlayerUserId });
+                        newSocket.emit(MessageTypeFPS.IDENTIFY_PLAYER, { userId: localPlayerUserId, matchId: matchId });
 
                         // Setup listeners
                         newSocket.on(MessageTypeFPS.GAME_STATE_FPS, (gameState) => {
@@ -1372,7 +1565,7 @@ function GameViewFPS({
                                     inputStateRef.current.pendingInputs.forEach((input, index) => {
                                         // Reduce the impact of re-applied inputs to prevent over-correction
                                         const scaledDeltaTime = input.deltaTime * 0.3; // Scale down re-applied inputs
-                                        applyInputPhysics(localPlayerRef.current.rapierBody, input.keys, input.lookQuat, scaledDeltaTime);
+                                        applyInputPhysics(localPlayerRef.current.rapierBody, input.keys, input.lookQuat, scaledDeltaTime, localState.isOnGround);
                                     });
                                 }
                             }
@@ -1382,6 +1575,27 @@ function GameViewFPS({
                             setGameStateVersion(v => v + 1); // Trigger UI updates if needed
                         });
                         // Add other listeners...
+                        newSocket.on(MessageTypeFPS.SHOT_FIRED_VISUAL_FPS, (shotData) => {
+                            if (!isMounted) return;
+                        
+                            if (projectilePoolRef.current.length > 0) {
+                                const projectileMesh = projectilePoolRef.current.pop();
+                                
+                                // Set initial position
+                                projectileMesh.position.set(shotData.startPosition.x, shotData.startPosition.y, shotData.startPosition.z);
+                                projectileMesh.visible = true;
+                        
+                                // Add to active list for animation in the render loop
+                                activeVisualProjectilesRef.current.push({
+                                    mesh: projectileMesh,
+                                    target: new THREE.Vector3(shotData.endPosition.x, shotData.endPosition.y, shotData.endPosition.z),
+                                    speed: 200, // Adjust speed of the visual tracer
+                                    startTime: performance.now()
+                                });
+                            } else {
+                                console.warn("No available projectiles in the pool to display shot visual.");
+                            }
+                        });
 
                         newSocket.on('disconnect', (reason) => {
                             if (!isMounted) return;
@@ -1488,11 +1702,22 @@ function GameViewFPS({
                          }
                       }
                  });
+                // NEW: Dispose projectile pool geometry/material
+                if (projectilePoolRef.current.length > 0) {
+                    const sampleProjectile = projectilePoolRef.current[0];
+                    sampleProjectile.geometry.dispose();
+                    sampleProjectile.material.dispose();
+                }
                 rendererRef.current.dispose();
             }
             // OrbitControls disposal removed, handled by DebugControls
         };
     }, [serverIp, serverPort, matchId, mapId, localPlayerCharacterId, opponentPlayerCharacterId, localPlayerUserId]); // Essential props that trigger re-init
+
+    // --- NEW: Prepare props for the HUD ---
+    const gameState = gameStateRef.current;
+    const localPlayerState = gameState?.players?.[localPlayerUserId] || null;
+    const opponentPlayerState = gameState?.players?.[opponentPlayerId] || null;
 
     return (
         <div style={{ width: '100%', height: '100%', position: 'relative', background: '#222' }}>
@@ -1510,6 +1735,16 @@ function GameViewFPS({
                 renderer={rendererRef.current}
                 scene={sceneRef.current}
                 rapierWorld={rapierWorldRef.current}
+            />
+
+            {/* NEW: Render the HUD */}
+            <HUD
+                localPlayer={localPlayerState}
+                opponent={opponentPlayerState}
+                matchState={gameState?.matchState}
+                roundWins={gameState?.roundWins}
+                localPlayerUserId={localPlayerUserId}
+                opponentPlayerId={opponentPlayerId}
             />
 
             {/* Potential UI Overlays */}

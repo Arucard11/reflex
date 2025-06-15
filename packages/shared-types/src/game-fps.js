@@ -42,7 +42,7 @@ export const CollisionGroup = {
     PLAYER_BODY: 1 << 1,  // Player physics capsule
     PLAYER_HITBOX: 1 << 2,// Separate hitboxes for damage
     GRENADE: 1 << 3,      // Thrown grenades
-    PROJECTILE: 1 << 4,   // Bullets, if modeled as objects (currently raycast)
+    PROJECTILE: 1 << 4,   // NEW: Bullets, if modeled as objects
     PLAYER_UTILITY_RAY: 1 << 5, // NEW: For player's internal raycasts like ground checks
     // ... add more as needed (e.g., vehicles, interactables)
 
@@ -223,6 +223,7 @@ export const MessageTypeFPS = {
     GAME_STATE_FPS: 'game_state_fps', // Full or delta game state update
     HIT_CONFIRMED_FPS: 'hit_confirmed_fps', // Server confirms your shot hit someone
     PLAYER_DIED_FPS: 'player_died_fps', // Announces a player death
+    SHOT_FIRED_VISUAL_FPS: 'shot_fired_visual_fps', // NEW: For visual-only projectiles
     GRENADE_EXPLODED_FPS: 'grenade_exploded_fps', // Announces grenade detonation location/type
     ABILITY_USED_FPS: 'ability_used_fps', // Announces ability activation by a player
     GRAPPLE_STATE_UPDATE_FPS: 'grapple_state_update_fps', // Specific updates for grapple visuals/physics hints

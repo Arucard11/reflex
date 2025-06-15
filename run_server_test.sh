@@ -15,7 +15,7 @@ PROFILE_PROGRAM_ID="FakeProfileProgram11111111111111111111111"
 
 # Game Configuration
 PORT=3001
-MATCH_ID="test-match-$(date +%s)" # Unique ID using timestamp
+MATCH_ID="test-match-12345" # Unique ID using timestamp
 MAP_ID="map1" # Example map
 PLAYER1_USERID="player1_test"
 PLAYER1_CHARID="charA"       # Changed to charA
