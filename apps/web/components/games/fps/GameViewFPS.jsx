@@ -78,23 +78,23 @@ function GameViewFPS({
 
     // --- Input State Management ---
     const inputStateRef = useRef({
-        keys: { W: false, A: false, S: false, D: false, Space: false, Shift: false, Ability1: false, GrenadeFrag: false, GrenadeSemtex: false, GrenadeFlash: false, Reload: false, Interact: false, GrappleFire: false, WeaponSwitch: false },
+        keys: { W: false, A: false, S: false, D: false, Space: false, Shift: false, Crouch: false, Ability1: false, GrenadeFrag: false, GrenadeSemtex: false, GrenadeFlash: false, Reload: false, Interact: false, GrappleFire: false, WeaponSwitch: false },
         lookQuat: { x: 0, y: 0, z: 0, w: 1 },
         sequence: 0,
         pendingInputs: [],
-        isAiming: false, // NEW: Track right mouse button state
-        isFiring: false, // NEW: Track left mouse button state for firing
-        lastFireTime: 0, // NEW: Track client-side fire rate
-        // NEW: Separate mouse look components
-        cameraPitch: 0, // Up/down rotation for camera
-        characterYaw: 0, // Left/right rotation for character
+        // NEW: Initialize state values used in input handlers to prevent NaN errors
+        cameraPitch: 0,
+        characterYaw: 0,
+        isFiring: false,
+        isAiming: false,
+        lastFireTime: 0,
     });
     const lastInputSendTimeRef = useRef(0);
     const INPUT_SEND_INTERVAL = 1000 / 30; // Increased to 30Hz for smoother input
 
     // Use the existing cameraModeRef for all camera state:
     const cameraModeRef = useRef({
-        isThirdPerson: true,
+        isThirdPerson: true, // Keep as true to see the character
         isOrbital: false
     });
 
@@ -119,8 +119,8 @@ function GameViewFPS({
         if (!playerBody || physicsDeltaTime <= 0) return;
         
         // Reduced speeds and forces for smoother movement
-        const walkSpeed = 5; // Further reduced from 3.0
-        const runSpeed = 10; // Further reduced from 5.0
+        const walkSpeed = 2.5 ; // Further reduced from 3.0
+        const runSpeed = 5; // Further reduced from 5.0
         const jumpImpulse = 5.0; // Further reduced from 6.0
         const accelerationForce = 800.0; // Further reduced from 1200.0
         const maxAccelForce = 20.0; // Further reduced from 30.0
@@ -246,7 +246,7 @@ function GameViewFPS({
 
             // Prevent browser default actions for game keys *if pointer is locked*
             if (document.pointerLockElement && [
-                'KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'ShiftLeft', 'KeyC'
+                'KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'ShiftLeft', 'ControlLeft', 'KeyC'
                 // Add other game action keys here that might have browser defaults
             ].includes(event.code)) {
                 event.preventDefault();
@@ -272,6 +272,9 @@ function GameViewFPS({
                         break;
                     case 'ShiftLeft': 
                         inputStateRef.current.keys.Shift = true; 
+                        break;
+                    case 'ControlLeft': // NEW: Add Left Ctrl for crouch
+                        inputStateRef.current.keys.Crouch = true; 
                         break;
                     case 'KeyC': inputStateRef.current.keys.C = true; break; // Camera toggle still needs lock
                     case 'KeyQ': // NEW: Weapon Switch Key
@@ -329,6 +332,9 @@ function GameViewFPS({
                         break;
                     case 'KeyR':
                         inputStateRef.current.keys.Reload = false;
+                        break;
+                    case 'ControlLeft': // NEW: Release Left Ctrl crouch
+                        inputStateRef.current.keys.Crouch = false; 
                         break;
                 }
             }
@@ -485,16 +491,33 @@ function GameViewFPS({
             try {
                 if (!isMounted) return;
                 
+                console.log('🚀 Starting game initialization...');
                 setIsLoading(true);
                 setConnectionStatus('initializing');
 
                 // --- Access Config based on Props ---
+                console.log(`🗺️ Loading map: ${mapId}`);
+                console.log(`👤 Local character: ${localPlayerCharacterId}`);
+                console.log(`👤 Remote character: ${opponentPlayerCharacterId}`);
+                
                 const mapConfig = MAP_CONFIGS_FPS[mapId];
                 const localCharConfig = CHARACTER_CONFIG_FPS[localPlayerCharacterId];
                 const remoteCharConfig = CHARACTER_CONFIG_FPS[opponentPlayerCharacterId];
-                if (!mapConfig || !localCharConfig || !remoteCharConfig) {
-                    throw new Error("Missing required map or character config on client!");
+                
+                if (!mapConfig) {
+                    console.error(`❌ Map config not found for: ${mapId}`);
+                    throw new Error(`Missing map config for ${mapId}`);
                 }
+                if (!localCharConfig) {
+                    console.error(`❌ Local character config not found for: ${localPlayerCharacterId}`);
+                    throw new Error(`Missing local character config for ${localPlayerCharacterId}`);
+                }
+                if (!remoteCharConfig) {
+                    console.error(`❌ Remote character config not found for: ${opponentPlayerCharacterId}`);
+                    throw new Error(`Missing remote character config for ${opponentPlayerCharacterId}`);
+                }
+                
+                console.log('✅ All configs found, proceeding with asset loading...');
                 const localCharacterVisualYOffset = localCharConfig.visualYOffset || 0.0;
                 // We'll get the remote character's visualYOffset later when we have gameState
 
@@ -512,13 +535,18 @@ function GameViewFPS({
                 sceneRef.current.background = new THREE.Color(0x6699cc); // Example sky blue
 
                 cameraRef.current = new THREE.PerspectiveCamera(65, canvasElement.clientWidth / canvasElement.clientHeight, 0.1, 1000);
-                cameraRef.current.position.set(0, 1.6, 5); // Initial placeholder position
+                // NEW: Position camera closer to spawn area and looking towards spawn points
+                // Spawn points are at (-3, 6, -7) and (-3, 6, 7), so position camera to see this area
+                cameraRef.current.position.set(-3, 8, 0); // Above and between the spawn points
+                cameraRef.current.lookAt(-3, 6, -7); // Look towards player 1 spawn point
                 sceneRef.current.add(cameraRef.current);
 
                 // DEBUG: Log initial camera direction
                 const initialDirection = new THREE.Vector3();
                 cameraRef.current.getWorldDirection(initialDirection);
                 console.log('Initial Camera Facing Direction:', initialDirection);
+                console.log(`🎥 Camera positioned at: (${cameraRef.current.position.x}, ${cameraRef.current.position.y}, ${cameraRef.current.position.z})`);
+                console.log(`🎯 Camera looking towards spawn area at: (-3, 6, -7)`);
 
                 // >>> MODIFIED: Adjust FPV camera position <<<
                 // Assign FPV camera to ref
@@ -533,7 +561,9 @@ function GameViewFPS({
                 sceneRef.current.add(directionalLight);
                 
                 // --- Load Map Visuals (NEW) ---
+                console.log(`🗺️ Loading map from: ${mapConfig.visualAssetPath}`);
                 const mapGltf = await loader.loadAsync(mapConfig.visualAssetPath);
+                console.log('✅ Map GLB loaded successfully');
                 const mapMesh = mapGltf.scene;
                 mapMesh.traverse(node => { // Enable shadows on map objects
                     if (node.isMesh) {
@@ -542,10 +572,14 @@ function GameViewFPS({
                     }
                 });
                 sceneRef.current.add(mapMesh); // Add to scene via ref
+                console.log('✅ Map added to scene');
                 
                 // --- Load Character Models ---
                 const localModelPath = localCharConfig.modelPath;
                 const remoteModelPath = remoteCharConfig.modelPath;
+                
+                console.log(`👤 Loading local character from: ${localModelPath}`);
+                console.log(`👤 Loading remote character from: ${remoteModelPath}`);
                 
                 let localCharacterGltf, remoteCharacterGltf;
                 try {
@@ -553,8 +587,9 @@ function GameViewFPS({
                         loader.loadAsync(localModelPath),
                         loader.loadAsync(remoteModelPath)
                     ]);
+                    console.log('✅ Both character models loaded successfully');
                 } catch (error) {
-                    console.error("Failed to load character models:", error);
+                    console.error("❌ Failed to load character models:", error);
                     throw error;
                 }
 
@@ -562,39 +597,53 @@ function GameViewFPS({
                 localPlayerRef.current.mesh = localCharacterGltf.scene;
                 remotePlayerRef.current.mesh = remoteCharacterGltf.scene;
 
-                // Log all animation names for the local character model
-                if (localCharacterGltf.animations && localCharacterGltf.animations.length > 0) {
-                    console.log('--- AVAILABLE LOCAL PLAYER ANIMATIONS ---');
-                    localCharacterGltf.animations.forEach((clip, idx) => {
-                        console.log(`[${idx}]: ${clip.name}`);
+                // Process character model textures (simplified)
+                const processTextures = (gltf) => {
+                    gltf.scene.traverse(node => {
+                        if (node.isMesh && node.material) {
+                            const material = node.material;
+                            // Ensure textures are properly configured
+                            const textureProperties = ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'aoMap'];
+                            textureProperties.forEach(prop => {
+                                if (material[prop]) {
+                                    material[prop].needsUpdate = true;
+                                }
+                            });
+                        }
                     });
-                    console.log('------------------------------------');
-                } else {
-                    console.log('--- NO LOCAL PLAYER ANIMATIONS FOUND ---');
-                }
+                };
 
-                // Log all animation names for the remote character model
-                if (remoteCharacterGltf.animations && remoteCharacterGltf.animations.length > 0) {
-                    console.log('--- AVAILABLE REMOTE PLAYER ANIMATIONS ---');
-                    remoteCharacterGltf.animations.forEach((clip, idx) => {
-                        console.log(`[${idx}]: ${clip.name}`);
-                    });
-                    console.log('-----------------------------------------');
-                } else {
-                    console.log('--- NO REMOTE PLAYER ANIMATIONS FOUND ---');
-                }
+                // Process textures for both characters
+                processTextures(localCharacterGltf);
+                processTextures(remoteCharacterGltf);
+
+
 
                 // Store animations for both players
                 playerAnimationActionsRef.current = {}; // Local player animations
                 remotePlayerAnimationActionsRef.current = {}; // Remote player animations
                 
-                localCharacterGltf.animations.forEach(clip => {
-                    playerAnimationActionsRef.current[clip.name] = clip; // Local player
-                });
+                if (localCharacterGltf.animations && localCharacterGltf.animations.length > 0) {
+                    console.log('--- AVAILABLE LOCAL PLAYER ANIMATIONS ---');
+                    localCharacterGltf.animations.forEach((clip, idx) => {
+                        playerAnimationActionsRef.current[clip.name] = clip;
+                        console.log(`[${idx}]: ${clip.name}`);
+                    });
+                    console.log('------------------------------------');
+                } else {
+                    console.error('❌ NO LOCAL PLAYER ANIMATIONS FOUND');
+                }
                 
-                remoteCharacterGltf.animations.forEach(clip => {
-                    remotePlayerAnimationActionsRef.current[clip.name] = clip; // Remote player
-                });
+                if (remoteCharacterGltf.animations && remoteCharacterGltf.animations.length > 0) {
+                    console.log('--- AVAILABLE REMOTE PLAYER ANIMATIONS ---');
+                    remoteCharacterGltf.animations.forEach((clip, idx) => {
+                        remotePlayerAnimationActionsRef.current[clip.name] = clip;
+                        console.log(`[${idx}]: ${clip.name}`);
+                    });
+                    console.log('-----------------------------------------');
+                } else {
+                    console.error('❌ NO REMOTE PLAYER ANIMATIONS FOUND');
+                }
 
                 // Animation name mapping - Updated based on actual GLB animation names
                 // From the logs, we can see the actual available animations in the GLB file
@@ -828,7 +877,7 @@ function GameViewFPS({
                             // IMPORTANT: Set Collision Groups - MUST MATCH SERVER
                             const groups = interactionGroups(
                                 CollisionGroup.WORLD,
-                                [CollisionGroup.PLAYER_BODY, CollisionGroup.GRENADE, CollisionGroup.PROJECTILE]
+                                [CollisionGroup.PLAYER_BODY, CollisionGroup.GRENADE, CollisionGroup.PROJECTILE, CollisionGroup.PLAYER_UTILITY_RAY]
                             );
                             trimeshDesc.setCollisionGroups(groups);
                              
@@ -907,6 +956,31 @@ function GameViewFPS({
 
                     // Get Local Player State
                     const localState = gameStateRef.current?.players?.[localPlayerUserId];
+
+                    // >>> NEW: Client-side ground check for responsive jumping <<<
+                    let isClientOnGround = false;
+                    if (rapierWorldRef.current && localPlayerRef.current.rapierBody) {
+                        const rapierWorld = rapierWorldRef.current;
+                        const body = localPlayerRef.current.rapierBody;
+                        const currentPos = body.translation();
+                        
+                        const playerHeight = PLAYER_VISUAL_TOTAL_HEIGHT;
+                        const playerRadius = PLAYER_VISUAL_RADIUS;
+                        const halfHeight = playerHeight / 2;
+                        const capsuleBottomOffset = halfHeight - playerRadius;
+                        
+                        const rayOrigin = { x: currentPos.x, y: currentPos.y - capsuleBottomOffset, z: currentPos.z };
+                        const rayDirection = { x: 0, y: -1, z: 0 };
+                        const rayLength = playerRadius + 0.15;
+                        
+                        // The ray is part of the UTILITY group and should only hit the WORLD group
+                        const filterGroups = interactionGroups(CollisionGroup.PLAYER_UTILITY_RAY, [CollisionGroup.WORLD]);
+                        const ray = new RAPIER.Ray(rayOrigin, rayDirection);
+                        
+                        // Use a simple raycast; we don't need the normal on the client
+                        const hit = rapierWorld.castRay(ray, rayLength, true, filterGroups);
+                        isClientOnGround = !!hit;
+                    }
 
                     // --- NEW: Visual Projectile Animation ---
                     const stillActiveProjectiles = [];
@@ -1012,7 +1086,7 @@ function GameViewFPS({
                             inputStateRef.current.keys,
                             inputStateRef.current.lookQuat,
                             deltaTime,
-                            localState.isOnGround // NEW: Pass ground status
+                            isClientOnGround // NEW: Pass client-predicted ground status
                         );
                     }
 
@@ -1039,21 +1113,84 @@ function GameViewFPS({
                         if (localState && localState.isReloading) {
                             targetAnim = 'reloadIdle'; // Assuming 'reloadIdle' from mapping is for 3p model too
                         } else {
-                            // Use the actual animation names from the GLB file
-                            if (keys.W && keys.Shift) {
-                                targetAnim = 'runFowardFire'; // Note: GLB has typo "Foward" instead of "Forward"
-                            } else if (keys.W) {
-                                targetAnim = 'walkForward';
-                            } else if (keys.S) {
-                                targetAnim = 'walkBackward';
-                            } else if (keys.A) {
-                                targetAnim = 'strafeLeft';
-                            } else if (keys.D) {
-                                targetAnim = 'strafeRight';
+                            // NEW: COMPREHENSIVE MOVEMENT ANIMATION LOGIC
+                            // Supports crouch, diagonal movement, and combinations
+                            
+                            const isCrouching = keys.Crouch;
+                            const isRunning = keys.Shift;
+                            const W = keys.W; // Forward
+                            const A = keys.A; // Left
+                            const S = keys.S; // Backward
+                            const D = keys.D; // Right
+                            
+                            // Priority order: Action states > Complex movement > Simple movement > Idle
+                            
+                            if (isCrouching) {
+                                // CROUCH ANIMATIONS
+                                if (W && A) {
+                                    targetAnim = 'walkForwardCrouchLeft';
+                                } else if (W && D) {
+                                    targetAnim = 'walkForwardCrouchRight';
+                                } else if (S && A) {
+                                    targetAnim = 'walkBackwardCrouchLeft';
+                                } else if (S && D) {
+                                    targetAnim = 'walkBackwardCrouchRight';
+                                } else if (W) {
+                                    targetAnim = 'walkForwardCrouch';
+                                } else if (S) {
+                                    targetAnim = 'walkCrouchBackward';
+                                } else if (A) {
+                                    targetAnim = 'walkLeftCrouch';
+                                } else if (D) {
+                                    targetAnim = 'walkRightCrouch';
+                                } else {
+                                    targetAnim = 'crouchIdle';
+                                }
+                            } else if (isRunning && (W || A || S || D)) {
+                                // RUNNING ANIMATIONS
+                                if (W && A) {
+                                    targetAnim = 'runForwardLeft';
+                                } else if (W && D) {
+                                    targetAnim = 'runForwardRight';
+                                } else if (S && A) {
+                                    targetAnim = 'runBackwardLeft';
+                                } else if (S && D) {
+                                    targetAnim = 'runBackwardRight';
+                                } else if (W) {
+                                    targetAnim = 'runFowardFire'; // Note: Keep GLB typo for exact match
+                                } else if (S) {
+                                    targetAnim = 'runBackward';
+                                } else if (A) {
+                                    targetAnim = 'runLeft';
+                                } else if (D) {
+                                    targetAnim = 'runRight';
+                                }
+                            } else if (W || A || S || D) {
+                                // WALKING ANIMATIONS (diagonal combinations have priority)
+                                if (W && A) {
+                                    targetAnim = 'walkForwardLeft';
+                                } else if (W && D) {
+                                    targetAnim = 'walkForwardRight';
+                                } else if (S && A) {
+                                    targetAnim = 'walkBackwardLeft';
+                                } else if (S && D) {
+                                    targetAnim = 'walkBackwardRight';
+                                } else if (W) {
+                                    targetAnim = 'walkForward';
+                                } else if (S) {
+                                    targetAnim = 'walkBackward';
+                                } else if (A) {
+                                    targetAnim = 'strafeLeft';
+                                } else if (D) {
+                                    targetAnim = 'strafeRight';
+                                }
                             } else {
-                                // Use logical 'idle' - mapping will convert to correct GLB animation
+                                // IDLE ANIMATIONS
                                 targetAnim = 'idle';
                             }
+                            
+                            // DEBUG: Log the selected animation
+                            console.log(`🎭 Animation Selected: ${targetAnim} | Keys: W:${W} A:${A} S:${S} D:${D} Shift:${isRunning} Ctrl:${isCrouching}`);
                         }
 
                         // Enhanced DEBUG: Log available animations and target animation
@@ -1081,6 +1218,141 @@ function GameViewFPS({
                                     'T-pose',         // Bind pose
                                     'Default'         // Default pose
                                 ],
+                                // CROUCH ANIMATIONS
+                                'crouchIdle': [
+                                    'crouchIdle',
+                                    'crouch_idle',
+                                    'crouch',
+                                    'idle_crouch',
+                                    'squat_idle',
+                                    'idle'  // Fallback to standing idle
+                                ],
+                                'walkForwardCrouch': [
+                                    'walkForwardCrouch',
+                                    'walk_forward_crouch',
+                                    'crouchWalkForward',
+                                    'crouch_walk_forward',
+                                    'walkForward'  // Fallback to standing walk
+                                ],
+                                'walkLeftCrouch': [
+                                    'walkLeftCrouch',
+                                    'walk_left_crouch',
+                                    'crouchWalkLeft',
+                                    'crouch_walk_left',
+                                    'strafeLeft'  // Fallback to standing strafe
+                                ],
+                                'walkRightCrouch': [
+                                    'walkRightCrouch',
+                                    'walk_right_crouch',
+                                    'crouchWalkRight',
+                                    'crouch_walk_right',
+                                    'strafeRight'  // Fallback to standing strafe
+                                ],
+                                'walkCrouchBackward': [
+                                    'walkCrouchBackward',
+                                    'walk_crouch_backward',
+                                    'crouchWalkBackward',
+                                    'crouch_walk_backward',
+                                    'walkBackward'  // Fallback to standing walk
+                                ],
+                                'walkForwardCrouchLeft': [
+                                    'walkForwardCrouchLeft',
+                                    'walk_forward_crouch_left',
+                                    'crouchWalkForwardLeft',
+                                    'walkForwardLeft'  // Fallback to standing diagonal
+                                ],
+                                'walkForwardCrouchRight': [
+                                    'walkForwardCrouchRight',
+                                    'walk_forward_crouch_right',
+                                    'crouchWalkForwardRight',
+                                    'walkForwardRight'  // Fallback to standing diagonal
+                                ],
+                                'walkBackwardCrouchLeft': [
+                                    'walkBackwardCrouchLeft',
+                                    'walk_backward_crouch_left',
+                                    'crouchWalkBackwardLeft',
+                                    'walkBackwardLeft'  // Fallback to standing diagonal
+                                ],
+                                'walkBackwardCrouchRight': [
+                                    'walkBackwardCrouchRight',
+                                    'walk_backward_crouch_right',
+                                    'crouchWalkBackwardRight',
+                                    'walkBackwardRight'  // Fallback to standing diagonal
+                                ],
+                                // DIAGONAL WALKING ANIMATIONS
+                                'walkForwardLeft': [
+                                    'walkForwardLeft',
+                                    'walk_forward_left',
+                                    'walkNorthWest',
+                                    'walk_NW',
+                                    'walkForward'  // Fallback to simple forward
+                                ],
+                                'walkForwardRight': [
+                                    'walkForwardRight',
+                                    'walk_forward_right',
+                                    'walkNorthEast',
+                                    'walk_NE',
+                                    'walkForward'  // Fallback to simple forward
+                                ],
+                                'walkBackwardLeft': [
+                                    'walkBackwardLeft',
+                                    'walk_backward_left',
+                                    'walkSouthWest',
+                                    'walk_SW',
+                                    'walkBackward'  // Fallback to simple backward
+                                ],
+                                'walkBackwardRight': [
+                                    'walkBackwardRight',
+                                    'walk_backward_right',
+                                    'walkSouthEast',
+                                    'walk_SE',
+                                    'walkBackward'  // Fallback to simple backward
+                                ],
+                                // RUNNING ANIMATIONS
+                                'runForwardLeft': [
+                                    'runForwardLeft',
+                                    'run_forward_left',
+                                    'runNorthWest',
+                                    'runFowardLeft',  // Handle typos
+                                    'walkForwardLeft'  // Fallback to walking
+                                ],
+                                'runForwardRight': [
+                                    'runForwardRight',
+                                    'run_forward_right',
+                                    'runNorthEast',
+                                    'runFowardRight',  // Handle typos
+                                    'walkForwardRight'  // Fallback to walking
+                                ],
+                                'runBackwardLeft': [
+                                    'runBackwardLeft',
+                                    'run_backward_left',
+                                    'runSouthWest',
+                                    'walkBackwardLeft'  // Fallback to walking
+                                ],
+                                'runBackwardRight': [
+                                    'runBackwardRight',
+                                    'run_backward_right',
+                                    'runSouthEast',
+                                    'walkBackwardRight'  // Fallback to walking
+                                ],
+                                'runLeft': [
+                                    'runLeft',
+                                    'run_left',
+                                    'runStrafeLeft',
+                                    'strafeLeft'  // Fallback to walking
+                                ],
+                                'runRight': [
+                                    'runRight',
+                                    'run_right',
+                                    'runStrafeRight',
+                                    'strafeRight'  // Fallback to walking
+                                ],
+                                'runBackward': [
+                                    'runBackward',
+                                    'run_backward',
+                                    'walkBackward'  // Fallback to walking
+                                ],
+                                // EXISTING ANIMATIONS (keep original)
                                 'walkForward': [
                                     'walkForward',
                                     'walk_forward',
@@ -1158,7 +1430,6 @@ function GameViewFPS({
                                     'idle', 'Idle', 'idle_pose', 'T-pose', 'Default',
                                     ...safeIdleAnims
                                 ];
-                                
                                 
                                 for (const fallback of universalFallbacks) {
                                     if (playerAnimationActionsRef.current[fallback]) {
@@ -1272,6 +1543,8 @@ function GameViewFPS({
                     // --- Update Player Mesh Visibility & Position (FPS Optimized) ---
                     if (localPlayerRef.current.mesh) {
                         localPlayerRef.current.mesh.visible = cameraModeRef.current.isThirdPerson;
+                        console.log(`👤 Local player mesh visible: ${localPlayerRef.current.mesh.visible}, isThirdPerson: ${cameraModeRef.current.isThirdPerson}`);
+                        
                         // NEW: Update mesh from predicted Rapier body state
                         if (localPlayerRef.current.rapierBody) {
                             // Fetch localCharConfig to get visualYOffset
@@ -1290,6 +1563,8 @@ function GameViewFPS({
 
                             // Fast position update for responsive FPS feel
                             localPlayerRef.current.mesh.position.lerp(targetPosition, 0.8);
+                            
+                            console.log(`👤 Local player mesh positioned at: (${localPlayerRef.current.mesh.position.x.toFixed(2)}, ${localPlayerRef.current.mesh.position.y.toFixed(2)}, ${localPlayerRef.current.mesh.position.z.toFixed(2)})`);
 
                             // FPS CHARACTER ROTATION: Character should instantly face camera's horizontal direction
                             // In FPS games, the character model rotates immediately to match camera yaw
@@ -1463,11 +1738,13 @@ function GameViewFPS({
 
                     newSocket.on('connect', () => {
                         if (!isMounted) return;
+                        console.log('🔌 Socket connected successfully!');
                         setConnectionStatus('connected');
                         setRetryAttempt(0);
                         if (retryTimeoutRef.current) clearTimeout(retryTimeoutRef.current);
 
                         // Send identification
+                        console.log(`📤 Sending identification: userId=${localPlayerUserId}, matchId=${matchId}`);
                         newSocket.emit(MessageTypeFPS.IDENTIFY_PLAYER, { userId: localPlayerUserId, matchId: matchId });
 
                         // Setup listeners
@@ -1475,15 +1752,20 @@ function GameViewFPS({
                             // NEW: Log detailed server state for local player
                             const serverPlayerState = gameState.players?.[localPlayerUserId];
                             if (serverPlayerState) {
-                                console.log(`[Game State] Local player at: ${serverPlayerState.position?.x?.toFixed(2)}, ${serverPlayerState.position?.y?.toFixed(2)}, ${serverPlayerState.position?.z?.toFixed(2)}`);
+                                console.log(`📊 [Game State] Local player at: ${serverPlayerState.position?.x?.toFixed(2)}, ${serverPlayerState.position?.y?.toFixed(2)}, ${serverPlayerState.position?.z?.toFixed(2)}`);
+                                console.log(`📊 [Game State] Local player state: ${serverPlayerState.state}`);
+                            } else {
+                                console.log(`❌ [Game State] No local player state found for userId: ${localPlayerUserId}`);
                             }
                             
                             // Debug: Log all players in game state
                             if (gameState.players) {
-                                console.log(`[Game State] Players in state:`, Object.keys(gameState.players));
+                                console.log(`📊 [Game State] Players in state:`, Object.keys(gameState.players));
                                 for (const [userId, playerState] of Object.entries(gameState.players)) {
-                                    console.log(`[Game State] Player ${userId}: state=${playerState.state}, pos=${playerState.position?.x?.toFixed(2)},${playerState.position?.y?.toFixed(2)},${playerState.position?.z?.toFixed(2)}`);
+                                    console.log(`📊 [Game State] Player ${userId}: state=${playerState.state}, pos=${playerState.position?.x?.toFixed(2)},${playerState.position?.y?.toFixed(2)},${playerState.position?.z?.toFixed(2)}`);
                                 }
+                            } else {
+                                console.log(`❌ [Game State] No players object in game state`);
                             }
                             
                             if (!isMounted) return;

@@ -1,8 +1,3 @@
----
-description: 
-globs: 
-alwaysApply: true
----
 Okay, here is the development plan updated to incorporate the new features (multiple maps, character selection, dual guns, grenades, grapple gun) while maintaining the requested format.
 
 Refactored 1v1 FPS Game Development Plan (Integration Focused - With Feature Additions)

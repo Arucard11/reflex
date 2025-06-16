@@ -1,8 +1,3 @@
----
-description: 
-globs: 
-alwaysApply: true
----
 Phase 1: Foundational FPS Module Setup (Integration Aware) [Status: Completed] (100%)
 
 Objective: Create the specific skeleton for the FPS game instance server and client component, incorporating foundations for new features.

@@ -1,8 +1,3 @@
----
-description: 
-globs: 
-alwaysApply: true
----
 Refactored 1v1 FPS Game - Detailed Plan (with Feature Integrations)
 
 Phase 1: Foundational FPS Module Setup (Integration Aware)
