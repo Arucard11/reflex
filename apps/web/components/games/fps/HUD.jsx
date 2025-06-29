@@ -2,11 +2,44 @@ import React from 'react';
 
 // A simple functional component for the HUD
 // It receives the necessary parts of the game state as props
-const HUD = ({ localPlayer, opponent, matchState, roundWins, localPlayerUserId, opponentPlayerId }) => {
+const HUD = ({ localPlayer, opponent, matchState, roundWins, localPlayerUserId, opponentPlayerId, weaponPredictionState }) => {
 
+    // DEBUG: Log what we're receiving
+    console.log('🎮 [HUD] Rendering with props:', {
+        hasLocalPlayer: !!localPlayer,
+        matchState,
+        hasRoundWins: !!roundWins,
+        localPlayerUserId,
+        opponentPlayerId
+    });
+
+    // TEMPORARY: Show debug info instead of returning null
     if (!localPlayer || !matchState) {
-        // Don't render anything if the essential state isn't available yet
-        return null;
+        return (
+            <div style={{
+                position: 'absolute',
+                top: '50px',
+                left: '50px',
+                color: 'red',
+                background: 'rgba(0,0,0,0.8)',
+                padding: '20px',
+                fontFamily: 'monospace',
+                fontSize: '14px',
+                zIndex: 1000
+            }}>
+                <div>🎮 HUD DEBUG INFO:</div>
+                <div>localPlayer: {localPlayer ? 'EXISTS' : 'NULL'}</div>
+                <div>matchState: {matchState || 'NULL'}</div>
+                <div>localPlayerUserId: {localPlayerUserId}</div>
+                <div>opponentPlayerId: {opponentPlayerId}</div>
+                {localPlayer && (
+                    <div>
+                        <div>Player health: {localPlayer.health}</div>
+                        <div>Player state: {localPlayer.state}</div>
+                    </div>
+                )}
+            </div>
+        );
     }
 
     const healthPercentage = (localPlayer.health / 100) * 100; // Assuming max health is 100
@@ -28,6 +61,14 @@ const HUD = ({ localPlayer, opponent, matchState, roundWins, localPlayerUserId, 
     const localPlayerRoundWins = isLocalPlayerP1 ? p1Wins : p2Wins;
     const opponentRoundWins = isLocalPlayerP1 ? p2Wins : p1Wins;
 
+    // Determine opponent info - use the opponent object directly
+    const opponentHealth = opponent?.health ?? 0;
+    const opponentShield = opponent?.shield ?? 0;
+    const opponentAmmo = opponent?.currentAmmoInClip ?? 0; // Assuming server sends this for opponent
+    const opponentMaxAmmo = 30; // Placeholder, this should ideally come from WEAPON_CONFIG
+
+    // DEBUG: Log what the HUD is calculating
+    console.log(`🎮 [HUD] Calculated Values: localHealth=${localPlayer.health}, localShield=${localPlayer.shield}, opponentHealth=${opponentHealth}, opponentShield=${opponentShield}`);
 
     return (
         <div style={{
@@ -41,16 +82,40 @@ const HUD = ({ localPlayer, opponent, matchState, roundWins, localPlayerUserId, 
             pointerEvents: 'none', // Allow mouse events to pass through to the canvas
             textShadow: '1px 1px 2px rgba(0,0,0,0.7)',
         }}>
-            {/* 1. Crosshair */}
+            {/* 1. Crosshair - Fixed positioning */}
             <div style={{
                 position: 'absolute',
                 top: '50%',
-                left: '52%',
+                left: '50%',
                 transform: 'translate(-50%, -50%)',
                 width: '4px',
                 height: '4px',
-                backgroundColor: 'rgba(255, 255, 255, 0.8)',
+                backgroundColor: 'rgba(255, 255, 255, 0.9)',
                 borderRadius: '50%',
+                zIndex: 1000,
+                boxShadow: '0 0 4px rgba(0,0,0,0.8)'
+            }}></div>
+            
+            {/* Crosshair lines for better visibility */}
+            <div style={{
+                position: 'absolute',
+                top: '50%',
+                left: '50%',
+                transform: 'translate(-50%, -50%)',
+                width: '20px',
+                height: '2px',
+                backgroundColor: 'rgba(255, 255, 255, 0.6)',
+                zIndex: 999
+            }}></div>
+            <div style={{
+                position: 'absolute',
+                top: '50%',
+                left: '50%',
+                transform: 'translate(-50%, -50%)',
+                width: '2px',
+                height: '20px',
+                backgroundColor: 'rgba(255, 255, 255, 0.6)',
+                zIndex: 999
             }}></div>
 
             {/* 2. Top Center: Score & Match State */}
@@ -123,9 +188,37 @@ const HUD = ({ localPlayer, opponent, matchState, roundWins, localPlayerUserId, 
                 right: '20px',
                 textAlign: 'right',
             }}>
-                {/* Ammo */}
+                {/* Ammo - Use predicted state for immediate feedback */}
                 <div style={{ fontSize: '3em', fontWeight: 'bold' }}>
-                    <span>{localPlayer.isReloading ? 'RELOADING' : `${localPlayer.currentAmmoInClip ?? '-'}`}</span>
+                    {(() => {
+                        // Use predicted weapon state if available for immediate feedback
+                        const isPredictedReloading = weaponPredictionState?.isReloading ?? localPlayer.isReloading;
+                        const predictedAmmo = weaponPredictionState?.currentAmmoInClip ?? localPlayer.currentAmmoInClip;
+                        
+                        // Show reload progress if reloading
+                        if (isPredictedReloading && weaponPredictionState?.reloadStartTime) {
+                            const elapsed = performance.now() - weaponPredictionState.reloadStartTime;
+                            const progress = Math.min(elapsed / weaponPredictionState.reloadDuration, 1.0);
+                            const percentage = Math.floor(progress * 100);
+                            return (
+                                <span style={{ color: '#ffaa00' }}>
+                                    RELOADING ({percentage}%)
+                                </span>
+                            );
+                        }
+                        
+                        // Show weapon switching feedback
+                        if (weaponPredictionState?.isPredictingSwitch) {
+                            return (
+                                <span style={{ color: '#00aaff' }}>
+                                    SWITCHING...
+                                </span>
+                            );
+                        }
+                        
+                        // Normal ammo display
+                        return <span>{predictedAmmo ?? '-'}</span>;
+                    })()}
                     <span style={{ fontSize: '0.5em', marginLeft: '5px' }}>/ --</span>
                 </div>
 

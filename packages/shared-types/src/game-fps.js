@@ -51,6 +51,9 @@ export const CollisionGroup = {
     NONE: 0x00000000, // Collides with nothing
 };
 
+// --- NEW: Physics Constants ---
+export const MAX_SLOPE_ANGLE_RAD = 50 * (Math.PI / 180); // ~50 degrees
+
 /**
  * Rapier helper function to generate interaction groups bitmask.
  * @param {number} memberships - Which group(s) this object belongs to (use CollisionGroup constants).
@@ -220,6 +223,7 @@ export const MessageTypeFPS = {
     RELEASE_GRAPPLE_FPS: 'release_grapple_fps', // Stop grappling
 
     // Server -> Client
+    GAME_CONSTANTS_FPS: 'game_constants_fps', // NEW: Server sends physics constants to client
     GAME_STATE_FPS: 'game_state_fps', // Full or delta game state update
     HIT_CONFIRMED_FPS: 'hit_confirmed_fps', // Server confirms your shot hit someone
     PLAYER_DIED_FPS: 'player_died_fps', // Announces a player death

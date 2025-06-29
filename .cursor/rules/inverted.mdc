@@ -1,0 +1,8 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+Most of the things are inverted since the character model is messed up so make sure if you see inverted code assume it is on purpose and build to that logic.  
+
+

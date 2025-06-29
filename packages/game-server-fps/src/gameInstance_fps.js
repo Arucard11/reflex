@@ -13,8 +13,15 @@ const { performance } = require('perf_hooks'); // For precise timing
 console.log('FPS Game Instance Starting...');
 
 // NEW: Player Physics Dimensions Constants
-const PLAYER_TOTAL_HEIGHT = 0.5; // New smaller height
-const PLAYER_RADIUS = 0.12;       // New smaller radius
+// IMPORTANT: Visual and physics should match for FPS accuracy
+// Option A: Scale physics to match visual (recommended for consistency)
+const CHARACTER_VISUAL_SCALE = 0.30; // Visual model scale
+const PLAYER_TOTAL_HEIGHT = 1.8 * CHARACTER_VISUAL_SCALE; // Match visual: 0.54 units
+const PLAYER_RADIUS = 0.35 * CHARACTER_VISUAL_SCALE;      // Match visual: 0.105 units
+
+// Option B: Use full-size physics (current - creates visual/hitbox mismatch)
+// const PLAYER_TOTAL_HEIGHT = 1.8; // Full human height
+// const PLAYER_RADIUS = 0.35;      // Full human radius
 
 // --- Argument Parsing (Placeholder) ---
 // Will be populated by parseArguments function
@@ -26,26 +33,35 @@ let io = null;
 let gameLoopInterval = null; // Game loop starts later
 let players = {}; // Authoritative player state mapped by userId
 let connectedPlayers = {}; // Socket info mapped by userId
-let currentMatchState = 'loading'; // Initial state
+let currentMatchState = {
+    matchState: 'loading',
+    currentRound: 1,
+    timeRemaining: 0,
+    roundWins: { p1: 0, p2: 0 }
+}; // Initial state object
 let activeProjectiles = {}; // NEW: To store active projectiles
 let nextProjectileId = 0; // NEW: To generate unique projectile IDs
 // let timeRemaining = 0; // Managed by match flow later
 
 // NEW: Define variables for imported types in the module scope
-let MapId, CharacterId, GrenadeType, MessageTypeFPS, MAP_CONFIGS_FPS, CHARACTER_CONFIG_FPS, WEAPON_CONFIG_FPS, ABILITY_CONFIG_FPS, CollisionGroup, interactionGroups;
+let MapId, CharacterId, GrenadeType, MessageTypeFPS, MAP_CONFIGS_FPS, CHARACTER_CONFIG_FPS, WEAPON_CONFIG_FPS, ABILITY_CONFIG_FPS, CollisionGroup, interactionGroups, MAX_SLOPE_ANGLE_RAD;
 
 // --- Constants for Movement ---
 const TICK_RATE = 60; // Ticks per second
 const TICK_INTERVAL_MS = 1000 / TICK_RATE;     
-const WALK_SPEED = 2.5; // Further reduced to match client
-const RUN_SPEED = 5; // Further reduced to match client
-const JUMP_IMPULSE = 5.0; // Further reduced to match client
-const ACCELERATION_FORCE = 800.0; // Further reduced to match client
-const MAX_ACCEL_FORCE = 20.0; // Further reduced to match client
-const AIR_CONTROL_FACTOR = 0.2; // How much control player has in air
+// Movement speeds independent of character scale for good gameplay feel
+const WALK_SPEED = 2.5;                    // Good tactical walking speed
+const RUN_SPEED = 5.0;                     // Good competitive running speed  
+const JUMP_IMPULSE = 1.5;                 // Reasonable jump height
+const ACCELERATION_FORCE = 150.0;         // REDUCED from 200.0 to match client
+const MAX_ACCEL_FORCE = 5.0;              // REDUCED from 8.0 to match client
+const AIR_CONTROL_FACTOR = 0.2;           // NEW: Added to match client
 const MAX_PLAYER_SPEED = 5.0; // Reduced to match new run speed
-const DAMPING_FACTOR = 0.95; // Add damping factor for smoother movement
-const MAX_SLOPE_ANGLE_RAD = 50 * Math.PI / 180; // Max angle (~50 degrees) player can stand on
+const DAMPING_FACTOR = 0.95;
+
+// NEW: Movement smoothing variables to exactly match client
+const VELOCITY_SMOOTHING = 0.85;          // NEW: Must match client
+const MIN_FORCE_THRESHOLD = 0.05;         // NEW: Must match client - INCREASED from 0.01 to reduce micro-jitter
 
 // --- Initialization Sequence ---
 async function initialize() {
@@ -65,6 +81,7 @@ async function initialize() {
         ABILITY_CONFIG_FPS = sharedTypes.ABILITY_CONFIG_FPS;
         CollisionGroup = sharedTypes.CollisionGroup;
         interactionGroups = sharedTypes.interactionGroups;
+        MAX_SLOPE_ANGLE_RAD = sharedTypes.MAX_SLOPE_ANGLE_RAD;
         console.log("Shared types loaded dynamically.");
     } catch (error) {
         console.error("Failed to dynamically load shared types:", error);
@@ -168,19 +185,19 @@ function createPlayerPhysicsBody(playerId, position) {
         .setCanSleep(false)
         .setCcdEnabled(true)
         .lockRotations() // Prevent capsule from falling over
-        .setLinearDamping(3.0) // Increased from 2.0 to 3.0 for even smoother movement
-        .setAngularDamping(8.0); // Increased from 5.0 to 8.0 for better stability
+        .setLinearDamping(2.0) // Reduced back to 2.0 for more responsive movement
+        .setAngularDamping(5.0); // Reduced back to 5.0 for better responsiveness
     const body = rapierWorld.createRigidBody(bodyDesc);
 
     // Create Collider (Capsule)
     const colliderDesc = RAPIER.ColliderDesc.capsule(capsuleHalfHeight, PLAYER_RADIUS)
         .setDensity(700.0) // NEW: Significantly increased density
         .setFriction(0.7)
-        .setRestitution(0.2)
+        .setRestitution(0.1) // REDUCED from 0.2 to match client and reduce jitter from bouncing
         // NEW: Set Collision Groups
         .setCollisionGroups(interactionGroups(
             CollisionGroup.PLAYER_BODY, // Belongs to PLAYER_BODY group
-            [CollisionGroup.WORLD, CollisionGroup.PLAYER_BODY, CollisionGroup.GRENADE] // Collides with World, other Players, Grenades
+            [CollisionGroup.WORLD, CollisionGroup.PLAYER_BODY, CollisionGroup.GRENADE, CollisionGroup.PROJECTILE] // Collides with World, other Players, Grenades, AND PROJECTILES
         ))
         .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS); // Needed for ground detection
     // Set user data on the collider after creation
@@ -285,6 +302,8 @@ function initializePlayerStates() {
             },
             currentAmmoInClip: weapon1Config?.ammoCapacity || 0,
             
+            keys: {}, // To store the current input state
+            
             grappleState: { active: false, targetPoint: null, startTime: null },
             
             rapierBody: null,
@@ -300,6 +319,13 @@ function initializePlayerStates() {
             currentSpread: WEAPON_CONFIG_FPS[defaultWeapon1]?.baseSpread || 0,
             lastFireTime: 0,
             spreadRecoveryTimer: null,
+            // NEW: Add weapon switching delay timer
+            weaponSwitchTimer: 0,
+            weaponSwitchDelay: 250, // ms delay for weapon switching (for balance)
+            
+            // NEW: Replace setTimeout-based reload with deltaTime-based timer
+            reloadTimer: 0,        // Current reload progress in ms
+            reloadDuration: 0,     // Total reload duration for current weapon
         };
         console.log(`Initialized state for ${playerId} (Char: ${playerInfo.charId})`);
     });
@@ -355,6 +381,24 @@ function initSocketIO() {
             }
             
             console.log(`Socket ${socket.id} successfully associated with User ID: ${associatedUserId}`);
+            
+            // NEW: Send physics constants to the client first
+            const physicsConstants = {
+                CHARACTER_VISUAL_SCALE: CHARACTER_VISUAL_SCALE,
+                PLAYER_TOTAL_HEIGHT: PLAYER_TOTAL_HEIGHT,
+                PLAYER_RADIUS: PLAYER_RADIUS,
+                WALK_SPEED: WALK_SPEED,
+                RUN_SPEED: RUN_SPEED,
+                JUMP_IMPULSE: JUMP_IMPULSE,
+                ACCELERATION_FORCE: ACCELERATION_FORCE,
+                MAX_ACCEL_FORCE: MAX_ACCEL_FORCE,
+                AIR_CONTROL_FACTOR: AIR_CONTROL_FACTOR,
+                VELOCITY_SMOOTHING: VELOCITY_SMOOTHING,
+                MIN_FORCE_THRESHOLD: MIN_FORCE_THRESHOLD
+            };
+            socket.emit(MessageTypeFPS.GAME_CONSTANTS_FPS, physicsConstants);
+            console.log(`📋 [SERVER] Sent game constants to ${associatedUserId}:`, physicsConstants);
+            
             socket.emit(MessageTypeFPS.GAME_STATE_FPS, getFullGameStatePayload(associatedUserId));
             
             checkStartMatch();
@@ -378,82 +422,87 @@ function initSocketIO() {
         
         socket.on(MessageTypeFPS.PLAYER_FIRE_FPS, (fireData) => {
             const playerId = getPlayerIdFromSocket(socket);
-            if (!playerId) return;
-    
+            if (!playerId || !players[playerId] || players[playerId].state !== 'alive') return;
+
             const playerState = players[playerId];
-            if (!playerState || playerState.state !== 'alive') return;
-    
             const weaponConfig = WEAPON_CONFIG_FPS[playerState.weaponSlots[playerState.activeWeaponSlot]];
-            if (!weaponConfig) return;
-    
-            if (playerState.isReloading) {
-                return; // Prevent firing if reloading
-            }
-            
-            if (playerState.currentAmmoInClip <= 0) {
-                return; // Prevent firing if ammo is empty
-            }
-    
+            if (!weaponConfig || playerState.isReloading || playerState.currentAmmoInClip <= 0) return;
+
             const now = performance.now();
-            if (now - playerState.lastFireTime < weaponConfig.fireRate) {
-                return; // Authoritative fire rate check
-            }
-    
+            if (now - playerState.lastFireTime < weaponConfig.fireRate) return;
+
             playerState.lastFireTime = now;
             playerState.currentAmmoInClip--;
-
-            // NEW: Increase spread with each shot
             playerState.currentSpread = Math.min(
                 weaponConfig.maxSpread,
                 playerState.currentSpread + weaponConfig.spreadIncreasePerShot
             );
-    
+
             if (playerState.activeWeaponSlot === 0) {
                 playerState.ammoInClip[0] = playerState.currentAmmoInClip;
             } else {
                 playerState.ammoInClip[1] = playerState.currentAmmoInClip;
             }
-    
-            // --- REVERTED: Back to Raycasting for hit detection ---
+
             const authoritativeState = getPlayerAuthoritativeStateAtSequence(playerId, fireData.sequence);
-            const fireOrigin = authoritativeState.position;
             const fireDirectionQuat = authoritativeState.lookQuat;
-            const fireDirectionWithSpread = applySpreadToDirection(fireDirectionQuat, playerState);
-    
-            const ray = new RAPIER.Ray(fireOrigin, fireDirectionWithSpread);
+            const eyeLevelHeight = 1.6 * CHARACTER_VISUAL_SCALE;
+
+            // Start the ray from the player's physics body position, elevated to eye level.
+            const fireOrigin = { 
+                x: authoritativeState.position.x, 
+                y: authoritativeState.position.y + eyeLevelHeight, 
+                z: authoritativeState.position.z 
+            };
+            
+            const fireDirection = applySpreadToDirection(fireDirectionQuat, playerState);
+
+            const ray = new RAPIER.Ray(fireOrigin, fireDirection);
             const maxDistance = weaponConfig.range;
+            
+            // The hit filter ensures we don't hit the shooter themselves.
             const hit = rapierWorld.castRayAndGetNormal(
                 ray,
                 maxDistance,
                 true,
-                interactionGroups(CollisionGroup.PROJECTILE, [CollisionGroup.WORLD, CollisionGroup.PLAYER_BODY])
+                interactionGroups(CollisionGroup.PROJECTILE, [CollisionGroup.WORLD, CollisionGroup.PLAYER_BODY]),
+                null, // No specific collider group to test against
+                null, // No specific collider to test against
+                playerState.rapierBody // The rigid-body to ignore from the cast
             );
-    
+
             let endPosition;
+            let hitResult = null;
+            
             if (hit) {
                 const hitCollider = rapierWorld.getCollider(hit.colliderHandle);
                 const hitUserData = hitCollider?.userData;
                 const hitPoint = ray.pointAt(hit.toi);
                 endPosition = hitPoint;
-                processHit(playerId, hitCollider, hitUserData, hitPoint, weaponConfig.damage);
-            } else {
-                // If no hit, calculate a point far along the ray for the visual
-                endPosition = {
-                    x: fireOrigin.x + fireDirectionWithSpread.x * maxDistance,
-                    y: fireOrigin.y + fireDirectionWithSpread.y * maxDistance,
-                    z: fireOrigin.z + fireDirectionWithSpread.z * maxDistance,
-                };
-            }
 
-            // Broadcast the visual effect to all clients
+                console.log(`🎯 [SERVER] RAY HIT! UserData:`, hitUserData, `Distance: ${hit.toi.toFixed(3)}`);
+                
+                hitResult = { hit: true, point: hitPoint, distance: hit.toi, userData: hitUserData };
+                processHit(playerId, hitCollider, hitUserData, hitPoint, weaponConfig.damage);
+
+            } else {
+                console.log(`🎯 [SERVER] RAY MISS!`);
+                endPosition = {
+                    x: fireOrigin.x + fireDirection.x * maxDistance,
+                    y: fireOrigin.y + fireDirection.y * maxDistance,
+                    z: fireOrigin.z + fireDirection.z * maxDistance,
+                };
+                hitResult = { hit: false, point: endPosition, distance: maxDistance };
+            }
+            
             io.emit(MessageTypeFPS.SHOT_FIRED_VISUAL_FPS, {
                 ownerId: playerId,
                 startPosition: fireOrigin,
                 endPosition: endPosition,
                 weaponId: weaponConfig.id,
-                uniqueId: `${playerId}-${Date.now()}` // Simple unique ID
+                uniqueId: `${playerId}-${Date.now()}`,
+                hitResult: hitResult
             });
-            // --- End Raycasting Logic ---
             
             resetSpreadRecoveryTimer(playerState, weaponConfig);
         });
@@ -472,13 +521,22 @@ function initSocketIO() {
                 return;
             }
 
+            // NEW: Check if weapon switching is on cooldown
+            if (playerState.weaponSwitchTimer > 0) {
+                console.log(`Player ${playerId}: Weapon switch on cooldown (${playerState.weaponSwitchTimer}ms remaining)`);
+                return;
+            }
+
             // Cancel reload if they were reloading
             if (playerState.isReloading) {
+                console.log(`Player ${playerId}: Cancelling reload to switch weapons`);
                 playerState.isReloading = false;
-                // We might need to clear a reload timeout if it's stored on the playerState
+                playerState.reloadTimer = 0;
+                playerState.reloadDuration = 0;
             }
 
             // Switch slot
+            const previousSlot = playerState.activeWeaponSlot;
             playerState.activeWeaponSlot = (playerState.activeWeaponSlot === 0) ? 1 : 0;
             
             // Update current ammo
@@ -489,7 +547,10 @@ function initSocketIO() {
             const newWeaponConfig = WEAPON_CONFIG_FPS[newWeaponId];
             playerState.currentSpread = newWeaponConfig?.baseSpread ?? 0;
 
-            console.log(`Player ${playerId} switched to weapon slot ${playerState.activeWeaponSlot} (${newWeaponId})`);
+            // NEW: Start weapon switch timer for balanced gameplay
+            playerState.weaponSwitchTimer = playerState.weaponSwitchDelay;
+
+            console.log(`Player ${playerId} switched from slot ${previousSlot} to slot ${playerState.activeWeaponSlot} (${newWeaponId})`);
             broadcastGameState();
         });
     
@@ -501,50 +562,29 @@ function initSocketIO() {
             if (!playerState || playerState.state !== 'alive' || playerState.isReloading) {
                 return;
             }
+
+            // NEW: Check if weapon switching is in progress
+            if (playerState.weaponSwitchTimer > 0) {
+                console.log(`Player ${playerId}: Cannot reload while switching weapons`);
+                return;
+            }
     
             const activeWeaponId = playerState.weaponSlots[playerState.activeWeaponSlot];
             const weaponConfig = WEAPON_CONFIG_FPS[activeWeaponId];
     
             if (!weaponConfig || playerState.currentAmmoInClip >= weaponConfig.ammoCapacity) {
+                console.log(`Player ${playerId}: Cannot reload ${activeWeaponId} (already full or invalid weapon)`);
                 return;
             }
     
-            console.log(`Player ${playerId}: Starting reload for ${activeWeaponId}`);
+            console.log(`Player ${playerId}: Starting reload for ${activeWeaponId} (${weaponConfig.reloadTime}ms)`);
+            
+            // NEW: Start deltaTime-based reload timer
             playerState.isReloading = true;
+            playerState.reloadTimer = 0;
+            playerState.reloadDuration = weaponConfig.reloadTime;
             
             broadcastGameState();
-    
-            setTimeout(() => {
-                const currentPlayerState = players[playerId];
-                if (
-                    !currentPlayerState ||
-                    currentPlayerState.state !== 'alive' ||
-                    !currentPlayerState.isReloading ||
-                    currentPlayerState.weaponSlots[currentPlayerState.activeWeaponSlot] !== activeWeaponId
-                ) {
-                    console.log(`Player ${playerId}: Reload for ${activeWeaponId} was interrupted.`);
-                    if (currentPlayerState && currentPlayerState.state === 'alive') {
-                        currentPlayerState.isReloading = false;
-                        broadcastGameState();
-                    }
-                    return;
-                }
-    
-                console.log(`Player ${playerId}: Reload complete for ${activeWeaponId}`);
-                const newAmmo = weaponConfig.ammoCapacity;
-                currentPlayerState.currentAmmoInClip = newAmmo;
-    
-                if (currentPlayerState.activeWeaponSlot === 0) {
-                    currentPlayerState.ammoInClip[0] = newAmmo;
-                } else {
-                    currentPlayerState.ammoInClip[1] = newAmmo;
-                }
-    
-                currentPlayerState.isReloading = false;
-                
-                broadcastGameState();
-    
-            }, weaponConfig.reloadTime);
         });
 
         socket.on('disconnect', (reason) => {
@@ -607,7 +647,7 @@ async function signalReadyToPlatform() {
             }
             // --- End Signal Readiness ---
 
-            currentMatchState = 'waiting';
+            currentMatchState.matchState = 'waiting';
             console.log("Instance is READY and waiting for players...");
             resolve(); // Resolve the promise once listening starts
         });
@@ -627,7 +667,7 @@ function startGameLoop() {
     }
     console.log('Starting Game Loop...');
     const loopStartTime = Date.now();
-    currentMatchState = 'in_progress'; // Or countdown first
+    currentMatchState.matchState = 'in_progress'; // FIXED: Update the property, not the whole object
 
     gameLoopInterval = setInterval(() => {
         const tickStart = performance.now();
@@ -640,7 +680,18 @@ function startGameLoop() {
         // 2. Update Player States from Physics & Handle Game Logic
         for (const playerId in players) {
              const playerState = players[playerId];
-             if (playerState.rapierBody) {
+             if (playerState.rapierBody && playerState.state === 'alive') {
+                // Apply movement from last known input state
+                if (playerState.keys) {
+                    applyMovementInputToPlayer(
+                        playerId,
+                        playerState.rapierBody,
+                        playerState.keys,
+                        playerState.lookDirection,
+                        TICK_INTERVAL_MS / 1000 // Use fixed server delta time
+                    );
+                }
+
                 // >>> NEW: Check ground status <<< (Plan 2.2.1)
                 updateGroundStatus(playerId);
 
@@ -649,7 +700,7 @@ function startGameLoop() {
                 const vel = playerState.rapierBody.linvel();
                 playerState.position = { x: pos.x, y: pos.y, z: pos.z };
                 playerState.velocity = { x: vel.x, y: vel.y, z: vel.z };
-
+                
                 // NEW: Store position history for lag compensation
                 const MAX_HISTORY_LENGTH = 60; // Store ~1 second of history
                 playerState.positionHistory.push({
@@ -659,30 +710,14 @@ function startGameLoop() {
                 if (playerState.positionHistory.length > MAX_HISTORY_LENGTH) {
                     playerState.positionHistory.shift();
                 }
+                
+                // NEW: Update weapon timers using deltaTime instead of setTimeout
+                updateWeaponTimers(playerId, TICK_INTERVAL_MS);
+            }
 
-                // Check ground status (needs collision event processing)
-                // updateGroundStatus(playerId);
-
-                // Apply air control reduction (optional)
-                // if (!playerState.isOnGround) { /* reduce forces? */ }
-
-                // Update cooldowns (Abilities, Grenades?)
-                updateCooldowns(playerId, TICK_INTERVAL_MS);
-
-                // Regenerate Shield (Example)
-                // if (playerState.shield < CHARACTER_CONFIG_FPS[playerState.characterId].baseShield && Date.now() > playerState.lastDamageTime + SHIELD_REGEN_DELAY) {
-                //     playerState.shield += SHIELD_REGEN_RATE * (TICK_INTERVAL_MS / 1000);
-                //     playerState.shield = Math.min(playerState.shield, CHARACTER_CONFIG_FPS[playerState.characterId].baseShield);
-                // }
-
-                // Update Spread recovery
-                // if (playerState.currentSpread > WEAPON_CONFIG_FPS[playerState.weaponSlots[playerState.activeWeaponSlot]].baseSpread && Date.now() > playerState.serverLastFireTime + SPREAD_RECOVERY_DELAY) {
-                //      playerState.currentSpread -= WEAPON_CONFIG_FPS[playerState.weaponSlots[playerState.activeWeaponSlot]].spreadRecoveryRate * (TICK_INTERVAL_MS / 1000);
-                //      playerState.currentSpread = Math.max(playerState.currentSpread, WEAPON_CONFIG_FPS[playerState.weaponSlots[playerState.activeWeaponSlot]].baseSpread);
-                // }
-             }
+            // Update cooldowns (ability1, etc.)
+            updateCooldowns(playerId, TICK_INTERVAL_MS);
         }
-
 
         // 3. Broadcast Game State
         broadcastGameState();
@@ -723,10 +758,10 @@ function getFullGameStatePayload(targetUserId = null) {
     return {
          serverTick: Date.now(), // Or a tick counter
          mapId: config.mapId,
-         matchState: currentMatchState,
-         timeRemaining: 0, // TODO: Add timer state
-         currentRound: 1, // TODO: Add round state
-         roundWins: { p1: 0, p2: 0 }, // TODO: Add round wins state
+         matchState: currentMatchState.matchState, // Send just the string, not the whole object
+         timeRemaining: currentMatchState.timeRemaining,
+         currentRound: currentMatchState.currentRound,
+         roundWins: currentMatchState.roundWins,
          players: playerStates,
     };
 }
@@ -813,21 +848,23 @@ function handlePlayerInput(playerId, inputData) {
     // Validate player state
     const playerState = players[playerId];
     if (!playerState || playerState.state !== 'alive' || !playerState.rapierBody) return;
-    const { sequence, deltaTime, keys, lookQuat } = inputData;
+    const { sequence, keys, lookQuat } = inputData;
     // Sequence validation (allow some out-of-order, but ignore duplicates)
     if (sequence <= playerState.lastProcessedSequence) return;
 
-    // Store the full look quaternion for accurate shooting direction
+    // Store the latest input state. This will be applied in the game loop.
+    playerState.keys = keys;
     playerState.lookDirection = { ...lookQuat };
-
-    // Store input for reconciliation/lag comp
-    const MAX_INPUT_HISTORY = 120;
-    playerState.inputHistory[sequence] = { keys, lookQuat, deltaTime };
-    const historyKeys = Object.keys(playerState.inputHistory);
-    if (historyKeys.length > MAX_INPUT_HISTORY) delete playerState.inputHistory[historyKeys[0]];
-    // Apply input to physics
-    applyMovementInputToPlayer(playerId, playerState.rapierBody, keys, lookQuat, deltaTime);
     playerState.lastProcessedSequence = sequence;
+
+    // Restore input history for lag compensation
+    const MAX_INPUT_HISTORY = 120;
+    if (!playerState.inputHistory) playerState.inputHistory = {};
+    playerState.inputHistory[sequence] = { keys, lookQuat };
+    const historyKeys = Object.keys(playerState.inputHistory);
+    if (historyKeys.length > MAX_INPUT_HISTORY) {
+        delete playerState.inputHistory[historyKeys[0]];
+    }
 
     // The player's body rotation (for broadcasting) should only have yaw.
     const yawQuaternion = { x: 0, y: lookQuat.y, z: 0, w: lookQuat.w };
@@ -841,18 +878,6 @@ function handlePlayerInput(playerId, inputData) {
         yawQuaternion.w = 1.0;
     }
     playerState.rotation = yawQuaternion;
-
-    // Speed validation (allow higher if dash/grapple active)
-    const currentLinvel = playerState.rapierBody.linvel();
-    let allowedMaxSpeed = MAX_PLAYER_SPEED;
-    if (playerState.ability1Type === ABILITY_CONFIG_FPS.DASH && playerState.ability1CooldownRemaining > ABILITY_CONFIG_FPS[ABILITY_CONFIG_FPS.DASH].cooldown - 1000) allowedMaxSpeed *= 1.5;
-    if (playerState.grappleState.active) allowedMaxSpeed *= 2.0;
-    const currentSpeed = Math.sqrt(currentLinvel.x**2 + currentLinvel.y**2 + currentLinvel.z**2);
-    if (currentSpeed > allowedMaxSpeed) {
-        // Clamp velocity
-        const clampScale = allowedMaxSpeed / currentSpeed;
-        playerState.rapierBody.setLinvel({ x: currentLinvel.x * clampScale, y: currentLinvel.y, z: currentLinvel.z * clampScale }, true);
-    }
 }
 
 // --- Movement Engine: Applies validated input to Rapier body ---
@@ -872,46 +897,63 @@ function applyMovementInputToPlayer(playerId, playerBody, keys, lookQuat, deltaT
     const yawMag = Math.sqrt(yawQuaternion.y**2 + yawQuaternion.w**2);
     if (yawMag > 1e-6) { yawQuaternion.y /= yawMag; yawQuaternion.w /= yawMag; } else { yawQuaternion.w = 1.0; }
 
-    const _forward = {x: 0, y: 0, z: -1};
-    const _right = {x: 1, y: 0, z: 0};
+    const _forward = {x: 0, y: 0, z: 1}; // FIXED: Use +Z as forward to match shooting logic
+    const _right = {x: 1, y: 0, z: 0};    // Right is positive X
     const forward = applyQuaternion(_forward, yawQuaternion);
     const right = applyQuaternion(_right, yawQuaternion);
 
-    if (keys.W) { moveDirection.x += forward.x; moveDirection.z += forward.z; isMoving = true; }
-    if (keys.S) { moveDirection.x -= forward.x; moveDirection.z -= forward.z; isMoving = true; }
-    if (keys.A) { moveDirection.x -= right.x; moveDirection.z -= right.z; isMoving = true; }
+    if (keys.W) { moveDirection.x += forward.x; moveDirection.z += forward.z; isMoving = true; }      // W key moves FORWARD (add forward vector)
+    if (keys.S) { moveDirection.x -= forward.x; moveDirection.z -= forward.z; isMoving = true; }      // S key moves BACKWARD (subtract forward vector)
+    if (keys.A) { moveDirection.x -= right.x; moveDirection.z -= right.z; isMoving = true; }        // A key moves LEFT (subtract right vector)
     if (keys.D) { moveDirection.x += right.x; moveDirection.z += right.z; isMoving = true; }
 
-    if (isMoving) {
-        // Invert final movement vector to match user expectation
-        moveDirection.x *= -1;
-        moveDirection.z *= -1;
+    const currentLinvel = playerBody.linvel();
+    const currentSpeed = Math.sqrt(currentLinvel.x**2 + currentLinvel.z**2);
 
+    if (isMoving) {
+        // Corrected normalization
         const mag = Math.sqrt(moveDirection.x**2 + moveDirection.z**2);
         if (mag > 1e-6) { moveDirection.x /= mag; moveDirection.z /= mag; }
         const targetSpeed = keys.Shift ? RUN_SPEED : WALK_SPEED;
         desiredVelocity.x = moveDirection.x * targetSpeed;
         desiredVelocity.z = moveDirection.z * targetSpeed;
+    } else {
+        // NEW: If no input, desired velocity is zero to actively stop the player,
+        // but only if they are moving above a small threshold.
+        if (currentSpeed > 0.1) {
+            desiredVelocity.x = 0;
+            desiredVelocity.z = 0;
+        } else {
+            // Velocity is low, let friction and damping handle it.
+            // Don't apply any artificial braking forces.
+            desiredVelocity.x = currentLinvel.x;
+            desiredVelocity.z = currentLinvel.z;
+        }
     }
 
     // Apply force
-    const currentLinvel = playerBody.linvel();
     
-    // Apply damping to current velocity for smoother movement (match client)
-    const dampedVelocity = {
-        x: currentLinvel.x * DAMPING_FACTOR,
-        y: currentLinvel.y, // Don't damp Y velocity (gravity/jumping)
-        z: currentLinvel.z * DAMPING_FACTOR
+    // NEW: Smooth velocity transitions to reduce jitter (matching client)
+    const smoothedDesiredVel = {
+        x: currentLinvel.x + (desiredVelocity.x - currentLinvel.x) * VELOCITY_SMOOTHING,
+        z: currentLinvel.z + (desiredVelocity.z - currentLinvel.z) * VELOCITY_SMOOTHING
     };
     
-    // Calculate force needed to reach desired velocity
-    let force = { x: 0, y: 0, z: 0 };
-    const velocityDiffX = desiredVelocity.x - dampedVelocity.x;
-    const velocityDiffZ = desiredVelocity.z - dampedVelocity.z;
+    // Calculate force needed to reach smoothed desired velocity
+    const velocityDiffX = smoothedDesiredVel.x - currentLinvel.x;
+    const velocityDiffZ = smoothedDesiredVel.z - currentLinvel.z;
 
-    // Use smaller, smoother force application (match client)
-    force.x = velocityDiffX * ACCELERATION_FORCE * deltaTime * 0.5; // Reduced force multiplier
-    force.z = velocityDiffZ * ACCELERATION_FORCE * deltaTime * 0.5;
+    // Apply a direct force toward the desired velocity.
+    // Use a more stable force calculation to prevent accumulation
+    let force = { x: 0, y: 0, z: 0 };
+    
+    // NEW: Only apply significant forces to reduce micro-jitter (matching client)
+    if (Math.abs(velocityDiffX) > MIN_FORCE_THRESHOLD) {
+        force.x = velocityDiffX * ACCELERATION_FORCE * deltaTime;
+    }
+    if (Math.abs(velocityDiffZ) > MIN_FORCE_THRESHOLD) {
+        force.z = velocityDiffZ * ACCELERATION_FORCE * deltaTime;
+    }
 
     if (!isOnGround) { 
         force.x *= AIR_CONTROL_FACTOR; 
@@ -942,9 +984,9 @@ function applyMovementInputToPlayer(playerId, playerBody, keys, lookQuat, deltaT
         force.z = force.z - dotProduct * groundNormal.z;
     }
 
-    // Apply the smoothed velocity first, then the force (match client)
-    playerBody.setLinvel(dampedVelocity, true);
-    if (Math.sqrt(force.x**2 + force.y**2 + force.z**2) > 0.1) { // Check magnitude of the final (potentially 3D) force
+    // Apply the impulse. Rapier's solver and built-in damping will handle the rest.
+    const forceMagnitudeTotal = Math.sqrt(force.x**2 + force.y**2 + force.z**2);
+    if (forceMagnitudeTotal > 0.1) { // NEW: INCREASED threshold from 0.05 to 0.1 to match client and reduce micro-forces
         // NEW: Prevent NaN forces from crashing physics
         if (isNaN(force.x) || isNaN(force.y) || isNaN(force.z)) {
             console.error(`[Movement NaN] Detected NaN in force calculation for player ${playerId}. Aborting impulse.`);
@@ -1061,12 +1103,6 @@ function updateGroundStatus(playerId) {
         console.log(`Player ${playerId} ground status changed: ${playerState.isOnGround}. Slope Angle: ${(playerState.slopeAngle * 180 / Math.PI).toFixed(2)}°`);
     }
 
-    // NEW: Apply a "snap to ground" force to improve stability on slopes
-    if (playerState.isOnGround) {
-        const snapForce = 15.0; // A small constant downward force
-        body.applyImpulse({ x: 0, y: -snapForce * (TICK_INTERVAL_MS / 1000), z: 0 }, true);
-    }
-
     // NEW: Log position change if significant
     const posChanged = Math.abs(playerState.position.x - currentPos.x) > 0.01 ||
                      Math.abs(playerState.position.y - currentPos.y) > 0.01 ||
@@ -1086,8 +1122,8 @@ function updateGroundStatus(playerId) {
 // --- Match Lifecycle ---
 function checkStartMatch() {
     // NEW LOGGING
-    console.log(`[Match Check] Checking start conditions. State: ${currentMatchState}, Connected: ${Object.keys(connectedPlayers).length}`);
-    const isReady = currentMatchState === 'waiting';
+    console.log(`[Match Check] Checking start conditions. State: ${currentMatchState.matchState}, Connected: ${Object.keys(connectedPlayers).length}`);
+    const isReady = currentMatchState.matchState === 'waiting';
     const hasEnoughPlayers = Object.keys(connectedPlayers).length === 2;
 
     if (isReady && hasEnoughPlayers) {
@@ -1101,13 +1137,13 @@ function checkStartMatch() {
 function startMatchCountdown() {
      // Example countdown
      let countdown = 5;
-     currentMatchState = `countdown_${countdown}`;
+                     currentMatchState.matchState = `countdown_${countdown}`;
      broadcastGameState(); // Show initial countdown
 
      const countdownInterval = setInterval(() => {
           countdown--;
           if (countdown > 0) {
-             currentMatchState = `countdown_${countdown}`;
+             currentMatchState.matchState = `countdown_${countdown}`;
              broadcastGameState();
           } else {
              clearInterval(countdownInterval);
@@ -1131,13 +1167,13 @@ function startRound() {
 }
 
 function endMatch(winnerId) {
-    if (currentMatchState === 'finished') {
+    if (currentMatchState.matchState === 'finished') {
         console.log('Match has already been ended.');
         return;
     }
     console.log(`Match is ending. Winner: ${winnerId || 'N/A (Forfeit/Draw)'}`);
     
-    currentMatchState = 'finished';
+    currentMatchState.matchState = 'finished';
     stopGameLoop();
 
     // TODO: Phase 4 - Call Solana Escrow and Report to Platform API
@@ -1197,6 +1233,24 @@ function respawnPlayer(playerId) {
     }
 
     console.log(`${playerId} respawned.`);
+    
+    // DEBUG: List all colliders in the world
+    debugListColliders();
+}
+
+// NEW: Debug function to list all colliders and their properties
+function debugListColliders() {
+    console.log(`🔍 [DEBUG] === COLLIDER DEBUG INFO ===`);
+    console.log(`🔍 [DEBUG] Total colliders in world: ${rapierWorld.colliders.len()}`);
+    
+    rapierWorld.colliders.forEach((collider) => {
+        const handle = collider.handle; // Get handle directly from the collider object
+        const userData = collider.userData;
+        const position = collider.translation();
+        const shape = collider.shape;
+        console.log(`🔍 [DEBUG] Collider ${handle}: Type=${shape.type}, Pos=${position.x.toFixed(2)},${position.y.toFixed(2)},${position.z.toFixed(2)}, UserData:`, userData);
+    });
+    console.log(`🔍 [DEBUG] ========================`);
 }
 
 // Helper function for resetting physics (Plan 3.2.1)
@@ -1221,64 +1275,63 @@ function resetPlayerPhysics(rapierBody, position) {
  * @returns {{x, y, z}} A new direction vector with spread applied.
  */
 function applySpreadToDirection(directionQuat, playerState) {
-    const forward = { x: 0, y: 0, z: -1 };
+    // Ensure we have a valid quaternion
+    if (!directionQuat || typeof directionQuat.w !== 'number') {
+        console.error("[applySpreadToDirection] Invalid quaternion:", directionQuat);
+        return { x: 0, y: 0, z: 1 }; // Return default forward
+    }
+
+    const forward = { x: 0, y: 0, z: 1 }; // Reverted: Use +Z as forward to match server's quaternion logic
     const directionVec = applyQuaternion(forward, directionQuat);
 
-    const spread = playerState.currentSpread;
-    if (spread === 0) {
-        return directionVec;
+    // DEBUG: Log input and output
+    console.log(`🎯 [SERVER] Input quaternion:`, directionQuat);
+    console.log(`🎯 [SERVER] Direction vector after applyQuaternion:`, directionVec);
+
+    // Check if the quaternion transformation resulted in a valid vector
+    const magnitude = Math.sqrt(directionVec.x**2 + directionVec.y**2 + directionVec.z**2);
+    console.log(`🎯 [SERVER] Direction magnitude: ${magnitude}`);
+    
+    if (magnitude < 1e-9) {
+        console.warn("[applySpreadToDirection] Direction vector was too small. Returning default forward direction.");
+        return { x: 0, y: 0, z: 1 }; // Return a safe default forward direction
     }
 
-    // Create a random vector in a 2D circle for the spread offset
-    const randomAngle = Math.random() * 2 * Math.PI;
-    const randomRadius = Math.random() * spread;
-    const spreadOffset = {
-        x: Math.cos(randomAngle) * randomRadius,
-        y: Math.sin(randomAngle) * randomRadius,
+    // Normalize the direction vector
+    const normalizedDir = {
+        x: directionVec.x / magnitude,
+        y: directionVec.y / magnitude,
+        z: directionVec.z / magnitude
     };
 
-    // Create a stable orthonormal basis (a 3D coordinate system) from the direction vector
-    let up, right;
-    if (Math.abs(directionVec.x) < 1e-6 && Math.abs(directionVec.z) < 1e-6) {
-        // Edge case: Looking almost perfectly straight up or down.
-        // The global X axis can be our "right" vector.
-        right = { x: 1, y: 0, z: 0 };
-    } else {
-        // Standard case: Create "right" vector by crossing with the global up vector {0,1,0}.
-        // This gives a vector that is horizontal and perpendicular to the direction.
-        right = { x: -directionVec.z, y: 0, z: directionVec.x };
-        const mag = Math.sqrt(right.x * right.x + right.z * right.z);
-        // Normalize to make it a unit vector
-        if (mag > 1e-9) {
-            right.x /= mag;
-            right.z /= mag;
-        }
+    // Apply spread (simplified for now)
+    const spread = playerState.currentSpread || 0;
+    if (spread <= 0) {
+        return normalizedDir;
     }
 
-    // The final "up" for our basis is the cross product of the direction and our new "right".
-    up = {
-        x: directionVec.y * right.z - directionVec.z * right.y,
-        y: directionVec.z * right.x - directionVec.x * right.z,
-        z: directionVec.x * right.y - directionVec.y * right.x,
+    // Simple spread implementation - add random offset to direction
+    const spreadAmount = spread * 0.5; // Reduce spread for testing
+    const offsetX = (Math.random() - 0.5) * spreadAmount;
+    const offsetY = (Math.random() - 0.5) * spreadAmount;
+    
+    const spreadDir = {
+        x: normalizedDir.x + offsetX,
+        y: normalizedDir.y + offsetY,
+        z: normalizedDir.z
     };
-
-    // Apply the 2D spread offset to the 3D basis to get the final direction
-    directionVec.x += spreadOffset.x * right.x + spreadOffset.y * up.x;
-    directionVec.y += spreadOffset.x * right.y + spreadOffset.y * up.y;
-    directionVec.z += spreadOffset.x * right.z + spreadOffset.y * up.z;
-
-    // Normalize the final vector to ensure it's a valid direction (unit vector)
-    const finalMag = Math.sqrt(directionVec.x**2 + directionVec.y**2 + directionVec.z**2);
-    if (finalMag > 1e-9) {
-        directionVec.x /= finalMag;
-        directionVec.y /= finalMag;
-        directionVec.z /= finalMag;
-    } else {
-        console.warn("[applySpreadToDirection] Final direction vector was zero. Returning default.");
-        return { x: 0, y: 0, z: -1 }; // Return a safe default
+    
+    // Normalize again after adding spread
+    const spreadMag = Math.sqrt(spreadDir.x**2 + spreadDir.y**2 + spreadDir.z**2);
+    if (spreadMag > 1e-9) {
+        return {
+            x: spreadDir.x / spreadMag,
+            y: spreadDir.y / spreadMag,
+            z: spreadDir.z / spreadMag
+        };
     }
-
-    return directionVec;
+    
+    return normalizedDir; // Fallback to non-spread direction
 }
 
 
@@ -1324,24 +1377,42 @@ function resetSpreadRecoveryTimer(playerState, weaponConfig) {
  * @param {number} baseDamage - The base damage of the weapon.
  */
 function processHit(shooterId, hitCollider, hitUserData, hitPoint, baseDamage) {
+    console.log(`🎯 [SERVER] processHit called: shooter=${shooterId}, userData=`, hitUserData);
+    
+    if (!hitCollider) {
+        console.log(`🚫 [SERVER] processHit: No hit collider provided`);
+        return;
+    }
+    
     if (hitUserData && hitUserData.type === 'playerBody' && hitUserData.playerId) {
         const victimId = hitUserData.playerId;
+        console.log(`🎯 [SERVER] Processing player hit: ${shooterId} -> ${victimId}`);
 
-        if (shooterId === victimId) return;
+        if (shooterId === victimId) {
+            console.log(`🚫 [SERVER] Prevented self-damage: ${shooterId}`);
+            return;
+        }
 
         const victimState = players[victimId];
-        if (!victimState || victimState.state !== 'alive') return;
+        if (!victimState || victimState.state !== 'alive') {
+            console.log(`🚫 [SERVER] Victim ${victimId} not alive or doesn't exist. State: ${victimState?.state}`);
+            return;
+        }
         
         const damageMultiplier = 1.0; 
         const finalDamage = baseDamage * damageMultiplier;
 
-        console.log(`Player ${shooterId} hit ${victimId} for ${finalDamage} damage.`);
+        console.log(`💥 [SERVER] Player ${shooterId} hit ${victimId} for ${finalDamage} damage.`);
         const shooterSocket = connectedPlayers[shooterId]?.socket;
         if(shooterSocket) {
             shooterSocket.emit(MessageTypeFPS.HIT_CONFIRMED_FPS, { victimId, hitPoint });
         }
         
         applyDamage(victimId, shooterId, finalDamage);
+    } else if (hitUserData) {
+        console.log(`🎯 [SERVER] Hit non-player object: type=${hitUserData.type}`);
+    } else {
+        console.log(`🎯 [SERVER] Hit object with no userData (likely map geometry)`);
     }
 }
 
@@ -1440,7 +1511,7 @@ function getPlayerAuthoritativeStateAtSequence(playerId, sequence) {
         // Fallback to current state if no history is available
         return {
             position: playerState.position,
-            lookQuat: playerState.rotation
+            lookQuat: playerState.lookDirection  // FIXED: Use lookDirection instead of rotation
         };
     }
 
@@ -1484,6 +1555,58 @@ function getInputDirectionFromSequence(playerId, sequence) {
     }
     // Fallback to the player's last known full look direction if the sequence is not found
     return playerState.lookDirection;
+}
+
+/**
+ * Updates weapon-related timers using deltaTime instead of setTimeout
+ * This is more predictable and compatible with client prediction
+ */
+function updateWeaponTimers(playerId, deltaTimeMs) {
+    const playerState = players[playerId];
+    if (!playerState) return;
+
+    // Update weapon switch timer
+    if (playerState.weaponSwitchTimer > 0) {
+        playerState.weaponSwitchTimer -= deltaTimeMs;
+        if (playerState.weaponSwitchTimer <= 0) {
+            playerState.weaponSwitchTimer = 0;
+            // Weapon switch delay complete
+        }
+    }
+
+    // Update reload timer
+    if (playerState.isReloading && playerState.reloadDuration > 0) {
+        playerState.reloadTimer += deltaTimeMs;
+        
+        if (playerState.reloadTimer >= playerState.reloadDuration) {
+            // Reload complete
+            const activeWeaponId = playerState.weaponSlots[playerState.activeWeaponSlot];
+            const weaponConfig = WEAPON_CONFIG_FPS[activeWeaponId];
+            
+            if (weaponConfig && playerState.state === 'alive') {
+                console.log(`Player ${playerId}: Reload complete for ${activeWeaponId}`);
+                
+                const newAmmo = weaponConfig.ammoCapacity;
+                playerState.currentAmmoInClip = newAmmo;
+                
+                // Update the per-slot ammo tracking
+                playerState.ammoInClip[playerState.activeWeaponSlot] = newAmmo;
+                
+                playerState.isReloading = false;
+                playerState.reloadTimer = 0;
+                playerState.reloadDuration = 0;
+                
+                broadcastGameState();
+            } else {
+                // Reload was interrupted (player died, switched weapons, etc.)
+                console.log(`Player ${playerId}: Reload interrupted for ${activeWeaponId}`);
+                playerState.isReloading = false;
+                playerState.reloadTimer = 0;
+                playerState.reloadDuration = 0;
+                broadcastGameState();
+            }
+        }
+    }
 }
 
 // --- Entry Point ---
