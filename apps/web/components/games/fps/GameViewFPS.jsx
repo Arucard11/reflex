@@ -587,7 +587,7 @@ function GameViewFPS({
             // Create TOTAL visual rotation including recoil for the camera
             const totalPitch = inputStateRef.current.cameraPitch + recoilStateRef.current.pitch;
             const totalYaw = inputStateRef.current.characterYaw + recoilStateRef.current.yaw + Math.PI; // Add 180 degrees to align with weapon
-            const cameraEuler = new THREE.Euler(totalPitch, totalYaw, 0, 'YXZ');
+            const cameraEuler = new THREE.Euler(-totalPitch, totalYaw, 0, 'YXZ'); // Invert pitch to counteract yaw inversion
             const targetCameraQuaternion = new THREE.Quaternion().setFromEuler(cameraEuler);
             
             // NEW: Use direct assignment to remove camera sway and make movement instant
@@ -1226,7 +1226,7 @@ function GameViewFPS({
                         // Set the actual FPV weapon position
                         weaponGroup.position.set(0.12, -0.18, -0.4); // Pulled model further from camera
                         weaponGroup.scale.set(.008, .008, .008); // Adjusted scale
-                        weaponGroup.rotation.set(0,15,0);
+                        weaponGroup.rotation.set(0, Math.PI, 0); // Rotate 180 degrees on Y-axis
 
 
                         weaponGroup.visible = false; // Hide initially
