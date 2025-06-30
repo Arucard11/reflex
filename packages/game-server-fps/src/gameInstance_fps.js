@@ -12,16 +12,6 @@ const { performance } = require('perf_hooks'); // For precise timing
 
 console.log('FPS Game Instance Starting...');
 
-// NEW: Player Physics Dimensions Constants
-// IMPORTANT: Visual and physics should match for FPS accuracy
-// Option A: Scale physics to match visual (recommended for consistency)
-const CHARACTER_VISUAL_SCALE = 0.30; // Visual model scale
-const PLAYER_TOTAL_HEIGHT = 1.8 * CHARACTER_VISUAL_SCALE; // Match visual: 0.54 units
-const PLAYER_RADIUS = 0.35 * CHARACTER_VISUAL_SCALE;      // Match visual: 0.105 units
-
-// Option B: Use full-size physics (current - creates visual/hitbox mismatch)
-// const PLAYER_TOTAL_HEIGHT = 1.8; // Full human height
-// const PLAYER_RADIUS = 0.35;      // Full human radius
 
 // --- Argument Parsing (Placeholder) ---
 // Will be populated by parseArguments function
@@ -46,22 +36,15 @@ let nextProjectileId = 0; // NEW: To generate unique projectile IDs
 // NEW: Define variables for imported types in the module scope
 let MapId, CharacterId, GrenadeType, MessageTypeFPS, MAP_CONFIGS_FPS, CHARACTER_CONFIG_FPS, WEAPON_CONFIG_FPS, ABILITY_CONFIG_FPS, CollisionGroup, interactionGroups, MAX_SLOPE_ANGLE_RAD;
 
+// NEW: Define variables for physics constants
+let CHARACTER_VISUAL_SCALE, PLAYER_TOTAL_HEIGHT, PLAYER_RADIUS, WALK_SPEED, RUN_SPEED, JUMP_IMPULSE, ACCELERATION_FORCE, MAX_ACCEL_FORCE, AIR_CONTROL_FACTOR, MIN_FORCE_THRESHOLD, STOP_FORCE_MULTIPLIER, VELOCITY_SMOOTHING;
+
 // --- Constants for Movement ---
 const TICK_RATE = 60; // Ticks per second
 const TICK_INTERVAL_MS = 1000 / TICK_RATE;     
-// Movement speeds independent of character scale for good gameplay feel
-const WALK_SPEED = 2.5;                    // Good tactical walking speed
-const RUN_SPEED = 5.0;                     // Good competitive running speed  
-const JUMP_IMPULSE = 1.5;                 // Reasonable jump height
-const ACCELERATION_FORCE = 150.0;         // REDUCED from 200.0 to match client
-const MAX_ACCEL_FORCE = 5.0;              // REDUCED from 8.0 to match client
-const AIR_CONTROL_FACTOR = 0.2;           // NEW: Added to match client
+// DELETED: All movement constants are now imported from the shared package.
 const MAX_PLAYER_SPEED = 5.0; // Reduced to match new run speed
 const DAMPING_FACTOR = 0.95;
-
-// NEW: Movement smoothing variables to exactly match client
-const VELOCITY_SMOOTHING = 0.85;          // NEW: Must match client
-const MIN_FORCE_THRESHOLD = 0.05;         // NEW: Must match client - INCREASED from 0.01 to reduce micro-jitter
 
 // --- Initialization Sequence ---
 async function initialize() {
@@ -82,7 +65,23 @@ async function initialize() {
         CollisionGroup = sharedTypes.CollisionGroup;
         interactionGroups = sharedTypes.interactionGroups;
         MAX_SLOPE_ANGLE_RAD = sharedTypes.MAX_SLOPE_ANGLE_RAD;
-        console.log("Shared types loaded dynamically.");
+        
+        // NEW: Load physics constants from shared package
+        const physicsConstants = sharedTypes.PHYSICS_CONSTANTS;
+        CHARACTER_VISUAL_SCALE = physicsConstants.CHARACTER_VISUAL_SCALE;
+        PLAYER_TOTAL_HEIGHT = physicsConstants.PLAYER_TOTAL_HEIGHT;
+        PLAYER_RADIUS = physicsConstants.PLAYER_RADIUS;
+        WALK_SPEED = physicsConstants.WALK_SPEED;
+        RUN_SPEED = physicsConstants.RUN_SPEED;
+        JUMP_IMPULSE = physicsConstants.JUMP_IMPULSE;
+        ACCELERATION_FORCE = physicsConstants.ACCELERATION_FORCE;
+        MAX_ACCEL_FORCE = physicsConstants.MAX_ACCEL_FORCE;
+        AIR_CONTROL_FACTOR = physicsConstants.AIR_CONTROL_FACTOR;
+        MIN_FORCE_THRESHOLD = physicsConstants.MIN_FORCE_THRESHOLD;
+        STOP_FORCE_MULTIPLIER = physicsConstants.STOP_FORCE_MULTIPLIER;
+        VELOCITY_SMOOTHING = physicsConstants.VELOCITY_SMOOTHING;
+        
+        console.log("Shared types and physics constants loaded dynamically.");
     } catch (error) {
         console.error("Failed to dynamically load shared types:", error);
         process.exit(1); // Cannot proceed without shared types
@@ -176,79 +175,141 @@ async function initRapier() {
 // Function to create player physics representation
 function createPlayerPhysicsBody(playerId, position) {
     console.log(`Creating physics body for ${playerId} at ${JSON.stringify(position)}`);
-    // Use the new constants
-    const capsuleHalfHeight = PLAYER_TOTAL_HEIGHT / 2 - PLAYER_RADIUS;
-
-    // Create RigidBody
     const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
         .setTranslation(position.x, position.y, position.z)
         .setCanSleep(false)
-        .setCcdEnabled(true)
-        .lockRotations() // Prevent capsule from falling over
-        .setLinearDamping(2.0) // Reduced back to 2.0 for more responsive movement
-        .setAngularDamping(5.0); // Reduced back to 5.0 for better responsiveness
-    const body = rapierWorld.createRigidBody(bodyDesc);
+        .setCcdEnabled(true) // Enable continuous collision detection
+        .lockRotations() // Lock rotations to prevent capsule from falling over
+        .setLinearDamping(0.9) // Reduced from 4.2 to prevent "stuck in mud" feeling
+        .setAngularDamping(1.0); // Reduced from 8.0 for stability
+    const rapierBody = rapierWorld.createRigidBody(bodyDesc);
 
-    // Create Collider (Capsule)
+    // Using a capsule for the player body
+    const capsuleHalfHeight = PLAYER_TOTAL_HEIGHT / 2 - PLAYER_RADIUS;
     const colliderDesc = RAPIER.ColliderDesc.capsule(capsuleHalfHeight, PLAYER_RADIUS)
-        .setDensity(700.0) // NEW: Significantly increased density
-        .setFriction(0.7)
-        .setRestitution(0.1) // REDUCED from 0.2 to match client and reduce jitter from bouncing
-        // NEW: Set Collision Groups
+        .setDensity(800.0) // High density to push objects
+        .setFriction(0.8) // Standard friction
+        .setRestitution(0.02) // Minimal bounce
         .setCollisionGroups(interactionGroups(
-            CollisionGroup.PLAYER_BODY, // Belongs to PLAYER_BODY group
-            [CollisionGroup.WORLD, CollisionGroup.PLAYER_BODY, CollisionGroup.GRENADE, CollisionGroup.PROJECTILE] // Collides with World, other Players, Grenades, AND PROJECTILES
+            CollisionGroup.PLAYER_BODY, // This object is a PLAYER_BODY
+            [CollisionGroup.WORLD, CollisionGroup.PLAYER_BODY, CollisionGroup.GRENADE, CollisionGroup.PROJECTILE] // It collides with WORLD, other PLAYER_BODY, GRENADES, and PROJECTILES
         ))
-        .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS); // Needed for ground detection
-    // Set user data on the collider after creation
-    const collider = rapierWorld.createCollider(colliderDesc, body);
-    if (collider) {
-        collider.userData = { type: 'playerBody', playerId: playerId };
-    }
+        .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
 
-    console.log(`Physics body created for ${playerId} with handle: ${body.handle}`);
-    return body; // Return the created body
+    const collider = rapierWorld.createCollider(colliderDesc, rapierBody);
+    
+    // IMPORTANT: Set userData for hit detection
+    collider.userData = {
+        type: 'playerBody',
+        playerId: playerId
+    };
+
+    console.log(`Physics body created for ${playerId} with handle: ${rapierBody.handle}`);
+    return rapierBody; // Return the created body
 }
 
-// Step 3: Load Map Physics (1.2.2)
+// Step 3: Load Map Physics (1.2.2 - Modified for No Fallback)
 function loadMapPhysics(mapId) {
     console.log(`Loading Physics for Map ID: ${mapId}...`);
+    let loadedSuccessfully = false;
     const mapConfig = MAP_CONFIGS_FPS[mapId];
-    if (!mapConfig) {
-        throw new Error(`Map config not found for mapId: ${mapId}`);
-    }
-    const physicsData = mapConfig.physicsData;
-    if (!physicsData) {
-        console.warn(`[Physics Load] No physicsData found for map ${mapId}. No map colliders will be created.`);
-        return;
-    }
-   
 
-    // --- Only support Trimesh Loading ---
-    if (physicsData.vertices && physicsData.vertices.length > 0 && physicsData.indices && physicsData.indices.length > 0) {
-        console.log(`[Physics Load] Found vertices (${physicsData.vertices.length / 3}) and indices (${physicsData.indices.length / 3}). Attempting to load TR MESH...`);
-        try {
-            const rigidBodyDesc = RAPIER.RigidBodyDesc.fixed();
-            const body = rapierWorld.createRigidBody(rigidBodyDesc);
-            const trimeshDesc = RAPIER.ColliderDesc.trimesh(physicsData.vertices, physicsData.indices);
-            console.log(`[Physics Load] TrimeshDesc created.`);
-            // Set Collision Groups for trimesh map geometry
-            const groups = interactionGroups(
-                CollisionGroup.WORLD, // Belongs to WORLD group
-                [CollisionGroup.PLAYER_BODY, CollisionGroup.GRENADE, CollisionGroup.PROJECTILE, CollisionGroup.PLAYER_UTILITY_RAY] // Collides with Players, Grenades, Projectiles, AND UTILITY RAYS
-            );
-            trimeshDesc.setCollisionGroups(groups);
-            console.log(`[Physics Load] Trimesh Set collision groups to:`, groups);
-            const collider = rapierWorld.createCollider(trimeshDesc, body);
-            console.log(`[Physics Load] SUCCESS: Created trimesh map collider handle: ${collider.handle} attached to body handle: ${body.handle}`);
-        } catch (error) {
-            console.error(`[Physics Load] ERROR: Failed to create trimesh collider for map ${mapId}:`, error);
-            // No fallback to primitives
-        }
+    if (!mapConfig || !mapConfig.physicsData) {
+        console.error(`[Physics Load] FATAL: No map config or physics data found for map: ${mapId}`);
     } else {
-        console.error(`[Physics Load] No valid trimesh data found for map ${mapId}. Physics loading failed.`);
+        const physicsData = mapConfig.physicsData;
+        if (physicsData.vertices && physicsData.vertices.length > 0 && physicsData.indices && physicsData.indices.length > 0) {
+            if (validateTrimeshData(physicsData.vertices, physicsData.indices)) {
+                try {
+                    const rigidBodyDesc = RAPIER.RigidBodyDesc.fixed();
+                    const body = rapierWorld.createRigidBody(rigidBodyDesc);
+                    const trimeshDesc = RAPIER.ColliderDesc.trimesh(physicsData.vertices, physicsData.indices);
+                    console.log('[Physics Load] TrimeshDesc created.');
+                    
+                    const groups = interactionGroups(
+                        CollisionGroup.WORLD,
+                        [CollisionGroup.PLAYER_BODY, CollisionGroup.GRENADE, CollisionGroup.PROJECTILE, CollisionGroup.PLAYER_UTILITY_RAY]
+                    );
+                    trimeshDesc.setCollisionGroups(groups);
+                    console.log(`[Physics Load] Trimesh Set collision groups to: ${groups}`);
+
+                    const collider = rapierWorld.createCollider(trimeshDesc, body);
+                    console.log(`[Physics Load] SUCCESS: Created trimesh map collider handle: ${collider.handle} attached to body handle: ${body.handle}`);
+                    loadedSuccessfully = true;
+                } catch (error) {
+                    console.error(`[Physics Load] FATAL: Failed to create trimesh collider for map ${mapId}:`, error);
+                }
+            } else {
+                console.error(`[Physics Load] FATAL: Trimesh data for map ${mapId} is invalid.`);
+            }
+        } else {
+            console.error(`[Physics Load] FATAL: No valid trimesh data found for map ${mapId}.`);
+        }
     }
+
+    if (!loadedSuccessfully) {
+        console.error(`[Physics Load] CRITICAL: Map physics could not be loaded for map '${mapId}'. The server will now exit.`);
+        exitProcess(1); // Exit with an error code.
+    }
+
     console.log(`[Physics Load] Physics loading attempt complete for Map ${mapId}.`);
+}
+
+// NEW: Validate trimesh data for corruption
+function validateTrimeshData(vertices, indices) {
+    try {
+        // Check for reasonable data sizes
+        if (vertices.length < 9 || indices.length < 3) {
+            console.error(`[Trimesh Validation] Data too small: vertices=${vertices.length}, indices=${indices.length}`);
+            return false;
+        }
+        
+        // Check for NaN or infinite values
+        for (let i = 0; i < Math.min(100, vertices.length); i++) {
+            if (!isFinite(vertices[i])) {
+                console.error(`[Trimesh Validation] Invalid vertex value at index ${i}: ${vertices[i]}`);
+                return false;
+            }
+        }
+        
+        // Check for valid indices
+        const maxVertexIndex = (vertices.length / 3) - 1;
+        for (let i = 0; i < Math.min(100, indices.length); i++) {
+            if (indices[i] < 0 || indices[i] > maxVertexIndex) {
+                console.error(`[Trimesh Validation] Invalid index at ${i}: ${indices[i]} (max: ${maxVertexIndex})`);
+                return false;
+            }
+        }
+        
+        console.log(`[Trimesh Validation] Data appears valid. Vertices: ${vertices.length/3}, Triangles: ${indices.length/3}`);
+        return true;
+    } catch (error) {
+        console.error(`[Trimesh Validation] Validation failed:`, error);
+        return false;
+    }
+}
+
+// NEW: Create a simple ground plane as fallback
+function createFallbackGroundPlane() {
+    console.log(`[Physics Load] Creating fallback ground plane...`);
+    try {
+        const rigidBodyDesc = RAPIER.RigidBodyDesc.fixed();
+        const body = rapierWorld.createRigidBody(rigidBodyDesc);
+        
+        // Create a large ground plane at Y=0
+        const colliderDesc = RAPIER.ColliderDesc.cuboid(50, 0.1, 50) // 100x0.2x100 ground plane
+            .setTranslation(0, -0.1, 0) // Position slightly below Y=0
+            .setCollisionGroups(interactionGroups(
+                CollisionGroup.WORLD,
+                [CollisionGroup.PLAYER_BODY, CollisionGroup.GRENADE, CollisionGroup.PROJECTILE, CollisionGroup.PLAYER_UTILITY_RAY]
+            ));
+        
+        const collider = rapierWorld.createCollider(colliderDesc, body);
+        console.log(`[Physics Load] SUCCESS: Created fallback ground plane collider handle: ${collider.handle}`);
+    } catch (error) {
+        console.error(`[Physics Load] CRITICAL: Failed to create fallback ground plane:`, error);
+        throw new Error("Cannot create any physics collision geometry");
+    }
 }
 
 const getPlayerIds = () => [config.playersInfo.p1.userId, config.playersInfo.p2.userId];
@@ -446,12 +507,14 @@ function initSocketIO() {
 
             const authoritativeState = getPlayerAuthoritativeStateAtSequence(playerId, fireData.sequence);
             const fireDirectionQuat = authoritativeState.lookQuat;
-            const eyeLevelHeight = 1.6 * CHARACTER_VISUAL_SCALE;
+            
+            // NEW: Set raycast origin to 75% of player height for more realistic firing origin
+            const fireOriginHeight = PLAYER_TOTAL_HEIGHT * 0.75;
 
-            // Start the ray from the player's physics body position, elevated to eye level.
+            // Start the ray from the player's physics body position, elevated to the new origin height.
             const fireOrigin = { 
                 x: authoritativeState.position.x, 
-                y: authoritativeState.position.y + eyeLevelHeight, 
+                y: authoritativeState.position.y + fireOriginHeight - (PLAYER_TOTAL_HEIGHT / 2), // Adjust for capsule center
                 z: authoritativeState.position.z 
             };
             
@@ -460,15 +523,24 @@ function initSocketIO() {
             const ray = new RAPIER.Ray(fireOrigin, fireDirection);
             const maxDistance = weaponConfig.range;
             
+            // Define the groups the ray can interact with: WORLD and other PLAYER_BODYs
+            const filterGroups = interactionGroups(
+                CollisionGroup.PROJECTILE, 
+                [CollisionGroup.WORLD, CollisionGroup.PLAYER_BODY]
+            );
+
+            // Get the shooter's collider to exclude it from the raycast
+            const shooterCollider = playerState.rapierBody.collider(0);
+            
             // The hit filter ensures we don't hit the shooter themselves.
             const hit = rapierWorld.castRayAndGetNormal(
                 ray,
                 maxDistance,
-                true,
-                interactionGroups(CollisionGroup.PROJECTILE, [CollisionGroup.WORLD, CollisionGroup.PLAYER_BODY]),
-                null, // No specific collider group to test against
-                null, // No specific collider to test against
-                playerState.rapierBody // The rigid-body to ignore from the cast
+                true, // solid
+                undefined, // queryDisptacher
+                filterGroups, // collision groups
+                shooterCollider, // collider to exclude
+                undefined // rigid body to exclude
             );
 
             let endPosition;
@@ -480,7 +552,8 @@ function initSocketIO() {
                 const hitPoint = ray.pointAt(hit.toi);
                 endPosition = hitPoint;
 
-                console.log(`🎯 [SERVER] RAY HIT! UserData:`, hitUserData, `Distance: ${hit.toi.toFixed(3)}`);
+                // DIAGNOSTIC: Add more detailed logging
+                console.log(`🎯 [SERVER] RAY HIT! ColliderHandle: ${hit.colliderHandle}, ParentBodyHandle: ${hitCollider.parent()?.handle}, UserData:`, hitUserData, `Distance: ${hit.toi.toFixed(3)}`);
                 
                 hitResult = { hit: true, point: hitPoint, distance: hit.toi, userData: hitUserData };
                 processHit(playerId, hitCollider, hitUserData, hitPoint, weaponConfig.damage);
@@ -898,14 +971,14 @@ function applyMovementInputToPlayer(playerId, playerBody, keys, lookQuat, deltaT
     if (yawMag > 1e-6) { yawQuaternion.y /= yawMag; yawQuaternion.w /= yawMag; } else { yawQuaternion.w = 1.0; }
 
     const _forward = {x: 0, y: 0, z: 1}; // FIXED: Use +Z as forward to match shooting logic
-    const _right = {x: 1, y: 0, z: 0};    // Right is positive X
+    const _right = {x: -1, y: 0, z: 0};   // FIXED: Right is negative X (inverted coordinate system)
     const forward = applyQuaternion(_forward, yawQuaternion);
     const right = applyQuaternion(_right, yawQuaternion);
 
     if (keys.W) { moveDirection.x += forward.x; moveDirection.z += forward.z; isMoving = true; }      // W key moves FORWARD (add forward vector)
     if (keys.S) { moveDirection.x -= forward.x; moveDirection.z -= forward.z; isMoving = true; }      // S key moves BACKWARD (subtract forward vector)
     if (keys.A) { moveDirection.x -= right.x; moveDirection.z -= right.z; isMoving = true; }        // A key moves LEFT (subtract right vector)
-    if (keys.D) { moveDirection.x += right.x; moveDirection.z += right.z; isMoving = true; }
+    if (keys.D) { moveDirection.x += right.x; moveDirection.z += right.z; isMoving = true; }        // D key moves RIGHT (add right vector)
 
     const currentLinvel = playerBody.linvel();
     const currentSpeed = Math.sqrt(currentLinvel.x**2 + currentLinvel.z**2);
@@ -918,46 +991,44 @@ function applyMovementInputToPlayer(playerId, playerBody, keys, lookQuat, deltaT
         desiredVelocity.x = moveDirection.x * targetSpeed;
         desiredVelocity.z = moveDirection.z * targetSpeed;
     } else {
-        // NEW: If no input, desired velocity is zero to actively stop the player,
-        // but only if they are moving above a small threshold.
-        if (currentSpeed > 0.1) {
-            desiredVelocity.x = 0;
-            desiredVelocity.z = 0;
-        } else {
-            // Velocity is low, let friction and damping handle it.
-            // Don't apply any artificial braking forces.
-            desiredVelocity.x = currentLinvel.x;
-            desiredVelocity.z = currentLinvel.z;
+        // No input, so stop all horizontal movement directly.
+        playerBody.setLinvel({ x: 0, y: currentLinvel.y, z: 0 }, true);
+        desiredVelocity.x = 0;
+        desiredVelocity.z = 0;
+    }
+
+    // Apply force with improved stability
+    
+    // NEW: Calculate velocity difference directly without smoothing to reduce lag
+    const velocityDiffX = desiredVelocity.x - currentLinvel.x;
+    const velocityDiffZ = desiredVelocity.z - currentLinvel.z;
+
+    // Use velocity-based force calculation for more predictable movement
+    let force = { x: 0, y: 0, z: 0 };
+    
+    // NEW: Apply force only if the difference is significant and not near target
+    const targetSpeedXZ = Math.sqrt(desiredVelocity.x**2 + desiredVelocity.z**2);
+    const currentSpeedXZ = Math.sqrt(currentLinvel.x**2 + currentLinvel.z**2);
+    const speedDiff = Math.abs(targetSpeedXZ - currentSpeedXZ);
+    
+    // Only apply forces if we're not already close to the target velocity
+    if (speedDiff > MIN_FORCE_THRESHOLD) {
+        if (Math.abs(velocityDiffX) > MIN_FORCE_THRESHOLD) {
+            force.x = velocityDiffX * ACCELERATION_FORCE * deltaTime;
+        }
+        if (Math.abs(velocityDiffZ) > MIN_FORCE_THRESHOLD) {
+            force.z = velocityDiffZ * ACCELERATION_FORCE * deltaTime;
         }
     }
 
-    // Apply force
-    
-    // NEW: Smooth velocity transitions to reduce jitter (matching client)
-    const smoothedDesiredVel = {
-        x: currentLinvel.x + (desiredVelocity.x - currentLinvel.x) * VELOCITY_SMOOTHING,
-        z: currentLinvel.z + (desiredVelocity.z - currentLinvel.z) * VELOCITY_SMOOTHING
-    };
-    
-    // Calculate force needed to reach smoothed desired velocity
-    const velocityDiffX = smoothedDesiredVel.x - currentLinvel.x;
-    const velocityDiffZ = smoothedDesiredVel.z - currentLinvel.z;
-
-    // Apply a direct force toward the desired velocity.
-    // Use a more stable force calculation to prevent accumulation
-    let force = { x: 0, y: 0, z: 0 };
-    
-    // NEW: Only apply significant forces to reduce micro-jitter (matching client)
-    if (Math.abs(velocityDiffX) > MIN_FORCE_THRESHOLD) {
-        force.x = velocityDiffX * ACCELERATION_FORCE * deltaTime;
-    }
-    if (Math.abs(velocityDiffZ) > MIN_FORCE_THRESHOLD) {
-        force.z = velocityDiffZ * ACCELERATION_FORCE * deltaTime;
+    // FIXED: Add stronger stopping forces when not moving to prevent sliding
+    if (!isMoving && currentSpeed > 0.02) {
+        // The setLinvel call above now handles stopping, this is redundant.
     }
 
-    if (!isOnGround) { 
-        force.x *= AIR_CONTROL_FACTOR; 
-        force.z *= AIR_CONTROL_FACTOR; 
+    if (!isOnGround) {
+        force.x *= AIR_CONTROL_FACTOR;
+        force.z *= AIR_CONTROL_FACTOR;
     }
 
     // Clamp force magnitude for stability
@@ -968,10 +1039,9 @@ function applyMovementInputToPlayer(playerId, playerBody, keys, lookQuat, deltaT
         force.z *= scale;
     }
 
-    // --- NEW: Slope Force Projection ---
-    // If on a valid slope, project the horizontal force onto the slope's plane.
-    // This ensures the force is applied along the slope, not into it.
-    if (isOnGround && playerState.slopeAngle > 0.01 && playerState.groundNormal) {
+    // --- FIXED: Slope Force Projection (only when moving intentionally) ---
+    // Only apply slope projection when the player is actively trying to move
+    if (isOnGround && isMoving && playerState.slopeAngle > 0.01 && playerState.groundNormal) {
         const groundNormal = playerState.groundNormal;
         
         // Project the force vector F onto the plane with normal N: F_proj = F - dot(F, N) * N
@@ -984,14 +1054,21 @@ function applyMovementInputToPlayer(playerId, playerBody, keys, lookQuat, deltaT
         force.z = force.z - dotProduct * groundNormal.z;
     }
 
-    // Apply the impulse. Rapier's solver and built-in damping will handle the rest.
+    // Apply the impulse with additional safety checks
     const forceMagnitudeTotal = Math.sqrt(force.x**2 + force.y**2 + force.z**2);
-    if (forceMagnitudeTotal > 0.1) { // NEW: INCREASED threshold from 0.05 to 0.1 to match client and reduce micro-forces
+    if (forceMagnitudeTotal > 0.05 && isMoving) { // REDUCED threshold for better responsiveness with small characters
         // NEW: Prevent NaN forces from crashing physics
         if (isNaN(force.x) || isNaN(force.y) || isNaN(force.z)) {
             console.error(`[Movement NaN] Detected NaN in force calculation for player ${playerId}. Aborting impulse.`);
         } else {
-            playerBody.applyImpulse(force, true);
+            // NEW: Additional safety check for reasonable force magnitudes
+            if (forceMagnitudeTotal < 100.0) { // Prevent extremely large forces
+                playerBody.applyImpulse(force, true);
+            } else {
+                console.warn(`[Movement] Force magnitude too large (${forceMagnitudeTotal.toFixed(2)}) for player ${playerId}. Clamping.`);
+                const scale = 100.0 / forceMagnitudeTotal;
+                playerBody.applyImpulse({ x: force.x * scale, y: force.y * scale, z: force.z * scale }, true);
+            }
         }
     }
 
@@ -1073,7 +1150,9 @@ function updateGroundStatus(playerId) {
         ray,
         rayLength,
         true, // Solid check
-        filterGroups // ADDED: Filter to only hit world geometry
+        undefined, // queryDispatcher
+        filterGroups, // collision groups
+        playerState.rapierBody.collider(0) // exclude player's own collider
     );
 
     const previouslyOnGround = playerState.isOnGround;
@@ -1103,19 +1182,9 @@ function updateGroundStatus(playerId) {
         console.log(`Player ${playerId} ground status changed: ${playerState.isOnGround}. Slope Angle: ${(playerState.slopeAngle * 180 / Math.PI).toFixed(2)}°`);
     }
 
-    // NEW: Log position change if significant
-    const posChanged = Math.abs(playerState.position.x - currentPos.x) > 0.01 ||
-                     Math.abs(playerState.position.y - currentPos.y) > 0.01 ||
-                     Math.abs(playerState.position.z - currentPos.z) > 0.01;
-
-    if (posChanged) {
-       console.log(`[Physics Update] ${playerId} Pos: x:${currentPos.x.toFixed(2)}, y:${currentPos.y.toFixed(2)}, z:${currentPos.z.toFixed(2)}`);
-    }
-
-    // Update the playerState object directly (this is what gets sent)
-    playerState.position.x = currentPos.x;
-    playerState.position.y = currentPos.y;
-    playerState.position.z = currentPos.z;
+    // REMOVED: Position synchronization from ground check
+    // Position should only be updated in the main game loop to prevent conflicts
+    // This was causing position desync and jitter issues
 }
 
 

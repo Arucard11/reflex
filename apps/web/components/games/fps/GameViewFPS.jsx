@@ -17,7 +17,8 @@ import {
     // NEW: Import CollisionGroup AND interactionGroups function
     CollisionGroup,
     interactionGroups,
-    MAX_SLOPE_ANGLE_RAD
+    MAX_SLOPE_ANGLE_RAD,
+    PHYSICS_CONSTANTS // NEW: Import the single source of truth
 } from '@shared-types/game-fps';
 import DebugControls from './DebugControls'; // Import DebugControls
 import HUD from './HUD'; // NEW: Import the HUD component
@@ -56,20 +57,9 @@ function GameViewFPS({
     // Helper function to get server constants safely
     const getServerConstants = () => {
         if (!serverConstantsRef.current) {
-            console.warn('Server constants not yet received, using fallback values');
-            return {
-                CHARACTER_VISUAL_SCALE: 0.30,
-                PLAYER_TOTAL_HEIGHT: 1.8,
-                PLAYER_RADIUS: 0.35,
-                WALK_SPEED: 2.5,
-                RUN_SPEED: 5.0,
-                JUMP_IMPULSE: 1.5,
-                ACCELERATION_FORCE: 150.0,
-                MAX_ACCEL_FORCE: 5.0,
-                AIR_CONTROL_FACTOR: 0.2,
-                VELOCITY_SMOOTHING: 0.85,
-                MIN_FORCE_THRESHOLD: 0.05
-            };
+            console.warn('Server constants not yet received, using fallback values from shared package');
+            // NEW: Use the single source of truth for fallback constants
+            return PHYSICS_CONSTANTS;
         }
         return serverConstantsRef.current;
     };
@@ -234,6 +224,9 @@ function GameViewFPS({
                 } else {
                     prediction.currentAmmoInClip = serverState.currentAmmoInClip;
                 }
+                
+                // NEW: Round the result to prevent decimal ammo counts
+                prediction.currentAmmoInClip = Math.round(prediction.currentAmmoInClip);
             }
         }
         
@@ -286,7 +279,7 @@ function GameViewFPS({
         if (yawMag > 1e-6) { yawQuaternion.y /= yawMag; yawQuaternion.w /= yawMag; } else { yawQuaternion.w = 1.0; }
 
         const _forward = { x: 0, y: 0, z: 1 };
-        const _right = { x: 1, y: 0, z: 0 };
+        const _right = { x: -1, y: 0, z: 0 }; // FIXED: Right is negative X (inverted coordinate system)
         const forward = applyQuaternion(_forward, yawQuaternion);
         const right = applyQuaternion(_right, yawQuaternion);
 
@@ -303,29 +296,41 @@ function GameViewFPS({
             desiredVelocity.x = moveDirection.x * targetSpeed;
             desiredVelocity.z = moveDirection.z * targetSpeed;
         } else {
+            // No input, so stop all horizontal movement directly.
+            const currentLinvel = playerBody.linvel();
+            playerBody.setLinvel({ x: 0, y: currentLinvel.y, z: 0 }, true);
             desiredVelocity.x = 0;
             desiredVelocity.z = 0;
         }
         
         const currentLinvel = playerBody.linvel();
         
-        // NEW: Smooth velocity transitions to reduce jitter
-        const smoothedDesiredVel = {
-            x: currentLinvel.x + (desiredVelocity.x - currentLinvel.x) * velocitySmoothing,
-            z: currentLinvel.z + (desiredVelocity.z - currentLinvel.z) * velocitySmoothing
-        };
-        
-        const velocityDiffX = smoothedDesiredVel.x - currentLinvel.x;
-        const velocityDiffZ = smoothedDesiredVel.z - currentLinvel.z;
-        
+        // Calculate velocity difference directly for more responsive movement
+        const velocityDiffX = desiredVelocity.x - currentLinvel.x;
+        const velocityDiffZ = desiredVelocity.z - currentLinvel.z;
+
+        // Use velocity-based force calculation for more predictable movement
         const force = { x: 0, y: 0, z: 0 };
         
-        // NEW: Only apply forces if the difference is significant enough
-        if (Math.abs(velocityDiffX) > minForceThreshold) {
-            force.x = velocityDiffX * accelerationForce * physicsDeltaTime;
+        // Apply force only if the difference is significant and not near target
+        const targetSpeedXZ = Math.sqrt(desiredVelocity.x**2 + desiredVelocity.z**2);
+        const currentSpeedXZ = Math.sqrt(currentLinvel.x**2 + currentLinvel.z**2);
+        const speedDiff = Math.abs(targetSpeedXZ - currentSpeedXZ);
+        
+        // Only apply forces if we're not already close to the target velocity
+        if (speedDiff > minForceThreshold) {
+            if (Math.abs(velocityDiffX) > minForceThreshold) {
+                force.x = velocityDiffX * accelerationForce * physicsDeltaTime;
+            }
+            if (Math.abs(velocityDiffZ) > minForceThreshold) {
+                force.z = velocityDiffZ * accelerationForce * physicsDeltaTime;
+            }
         }
-        if (Math.abs(velocityDiffZ) > minForceThreshold) {
-            force.z = velocityDiffZ * accelerationForce * physicsDeltaTime;
+
+        // FIXED: Add stronger stopping forces when not moving to prevent sliding
+        const currentSpeed = Math.sqrt(currentLinvel.x**2 + currentLinvel.z**2);
+        if (!isMoving && currentSpeed > 0.02) {
+            // The setLinvel call above now handles stopping, this is redundant.
         }
         
         if (!isOnGround) {
@@ -333,8 +338,8 @@ function GameViewFPS({
             force.z *= airControlFactor;
         }
 
-        // --- NEW: Slope Force Projection (to match server) ---
-        if (isOnGround && groundNormal) {
+        // --- FIXED: Slope Force Projection (only when moving intentionally) ---
+        if (isOnGround && isMoving && groundNormal) {
             // Project the force vector F onto the plane with normal N: F_proj = F - dot(F, N) * N
             // Since our initial force is purely horizontal (force.y = 0), the dot product simplifies.
             const dotProduct = (force.x * groundNormal.x) + (force.z * groundNormal.z);
@@ -352,9 +357,9 @@ function GameViewFPS({
             force.z *= scale;
         }
 
-        // NEW: Higher threshold for applying forces to reduce micro-jitter
+        // Higher threshold for applying forces to reduce micro-jitter (matched to server)
         const totalForceMagnitude = Math.sqrt(force.x**2 + force.y**2 + force.z**2);
-        if (totalForceMagnitude > 0.1) { // INCREASED from 0.01
+        if (totalForceMagnitude > 0.15 && isMoving) { // MATCHED to server threshold
             if (!isNaN(force.x) && !isNaN(force.y) && !isNaN(force.z)) {
                  playerBody.applyImpulse(force, true);
             }
@@ -461,6 +466,9 @@ function GameViewFPS({
                                 
                                 console.log(`🔄 [CLIENT] Predicting weapon switch to slot ${nextSlot}`);
                                 
+                                // Get current active weapon ID for animation
+                                const currentActiveWeaponId = localPlayerState.weaponSlots[currentSlot];
+                                
                                 // Start client prediction
                                 weaponPredictionRef.current.isPredictingSwitch = true;
                                 weaponPredictionRef.current.weaponSwitchStartTime = performance.now();
@@ -474,8 +482,8 @@ function GameViewFPS({
                                 socketRef.current?.emit(MessageTypeFPS.SWITCH_WEAPON_FPS);
                                 
                                 // Play weapon switch animation/sound immediately
-                                if (activeWeaponId) {
-                                    playFpvAnimation(activeWeaponId, 'weapon_down', false);
+                                if (currentActiveWeaponId) {
+                                    playFpvAnimation(currentActiveWeaponId, 'weapon_down', false);
                                 }
                             }
                         }
@@ -578,7 +586,7 @@ function GameViewFPS({
 
             // Create TOTAL visual rotation including recoil for the camera
             const totalPitch = inputStateRef.current.cameraPitch + recoilStateRef.current.pitch;
-            const totalYaw = inputStateRef.current.characterYaw + recoilStateRef.current.yaw;
+            const totalYaw = inputStateRef.current.characterYaw + recoilStateRef.current.yaw + Math.PI; // Add 180 degrees to align with weapon
             const cameraEuler = new THREE.Euler(totalPitch, totalYaw, 0, 'YXZ');
             const targetCameraQuaternion = new THREE.Quaternion().setFromEuler(cameraEuler);
             
@@ -1216,9 +1224,10 @@ function GameViewFPS({
                         fpvElementsRef.current.camera.add(weaponGroup); // Add to FPV camera via ref
 
                         // Set the actual FPV weapon position
-                        weaponGroup.position.set(0.12, -0.18, -0.01); // Default FPV: Right, Down, Close
-                        weaponGroup.scale.set(.10, .10, .10);
-                        weaponGroup.rotation.set(0, Math.PI, 0);
+                        weaponGroup.position.set(0.12, -0.18, -0.4); // Pulled model further from camera
+                        weaponGroup.scale.set(.008, .008, .008); // Adjusted scale
+                        weaponGroup.rotation.set(0,15,0);
+
 
                         weaponGroup.visible = false; // Hide initially
 
@@ -2168,15 +2177,15 @@ function GameViewFPS({
                                 .setCanSleep(false)
                                 .setCcdEnabled(true)
                                 .lockRotations()
-                                .setLinearDamping(2.0) // MATCHED to server value (was 3.0)
-                                .setAngularDamping(5.0); // MATCHED to server value (was 8.0)
+                                .setLinearDamping(0.9) // MATCHED to server value
+                                .setAngularDamping(1.0); // MATCHED to server value
                             const body = rapierWorldRef.current.createRigidBody(bodyDesc);
                             
                             const capsuleHalfHeight = serverConstants.PLAYER_TOTAL_HEIGHT / 2 - serverConstants.PLAYER_RADIUS;
                             const colliderDesc = RAPIER.ColliderDesc.capsule(capsuleHalfHeight, serverConstants.PLAYER_RADIUS)
-                                .setDensity(700.0)
-                                .setFriction(0.7)
-                                .setRestitution(0.1) // REDUCED from 0.2 to reduce jitter from bouncing
+                                .setDensity(800.0) // MATCHED to server for stable physics
+                                .setFriction(0.8) // MATCHED to server for consistent movement
+                                .setRestitution(0.02) // MATCHED to server to minimize bouncing
                                 .setCollisionGroups(interactionGroups(
                                     CollisionGroup.PLAYER_BODY,
                                     [CollisionGroup.WORLD, CollisionGroup.PLAYER_BODY, CollisionGroup.GRENADE]
@@ -2344,7 +2353,7 @@ function GameViewFPS({
                             if (remoteState) {
                                 console.log(`Remote player hidden - state: ${remoteState.state}, hasPosition: ${!!remoteState.position}, hasRotation: ${!!remoteState.rotation}`);
                             } else {
-                                console.log('No remote player state found');
+                                // console.log('No remote player state found'); // This is too noisy
                             }
                          }
                     }
@@ -2396,8 +2405,8 @@ function GameViewFPS({
                             const cameraDecay = Math.exp(-cameraInterpSpeed * 60 * deltaTime);
                             cameraRef.current.position.lerp(tempCameraPos, 1 - cameraDecay);
                             
-                            // Camera should look in the full direction the player is looking (pitch + yaw)
-                            // This gives proper FPS third-person aiming
+                            // RESTORED: This lookAt call is essential for the third-person camera.
+                            // It orients the camera to look in the player's aiming direction.
                             const lookDirection = new THREE.Vector3(0, 0, 1);
                             const fullLookQuat = new THREE.Quaternion(
                                 inputStateRef.current.lookQuat.x,
@@ -2407,7 +2416,6 @@ function GameViewFPS({
                             );
                             lookDirection.applyQuaternion(fullLookQuat);
                             
-                            // Instant camera look direction for FPS precision
                             tempLookAt.copy(cameraRef.current.position).add(lookDirection.multiplyScalar(10));
                             cameraRef.current.lookAt(tempLookAt);
                         } else {
@@ -2452,7 +2460,8 @@ function GameViewFPS({
                         if (isFirstPerson && fpvElementsRef.current.camera) {
                             rendererRef.current.autoClear = false;
                             rendererRef.current.clearDepth();
-                            rendererRef.current.render(fpvElementsRef.current.camera, cameraRef.current); // Render FPV Camera objects using main camera's projection
+                            // Render the scene with the FPV camera to draw the weapon model on top
+                            rendererRef.current.render(sceneRef.current, fpvElementsRef.current.camera);
                             rendererRef.current.autoClear = true;
                         }
                     }

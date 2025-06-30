@@ -66,6 +66,27 @@ export function interactionGroups(memberships, filter) {
 }
 // --- End Physics Collision Groups ---
 
+// --- NEW: Shared Physics Constants (Single Source of Truth) ---
+export const PHYSICS_CONSTANTS = {
+    // Player capsule dimensions
+    CHARACTER_VISUAL_SCALE: 0.30,
+    PLAYER_TOTAL_HEIGHT: 1.8 * 0.30, // Where 1.8 is the base height
+    PLAYER_RADIUS: 0.35 * 0.30,       // Where 0.35 is the base radius
+    
+    // Movement physics - Rebalanced for smoother movement
+    WALK_SPEED: 2.5,
+    RUN_SPEED: 5.0,
+    JUMP_IMPULSE: 1.5,
+    ACCELERATION_FORCE: 75.0,         // Restored for good initial thrust
+    MAX_ACCEL_FORCE: 15.0,             // Balanced max force
+    AIR_CONTROL_FACTOR: 0.3,          // Increased from 0.2 for better air movement
+    
+    // Movement stability - Adjusted for responsiveness
+    VELOCITY_SMOOTHING: 0.90, // Not used in server physics, but for client replication
+    MIN_FORCE_THRESHOLD: 0.02,        // Reduced from 0.08 to allow smaller movements
+    STOP_FORCE_MULTIPLIER: 1.5,       // Restored for crisp stops with lower damping
+};
+
 // --- Configuration Structures ---
 
 /**
